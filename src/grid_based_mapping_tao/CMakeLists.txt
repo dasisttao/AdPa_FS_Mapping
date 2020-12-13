@@ -143,6 +143,7 @@ link_directories(${PCL_LIBRARY_DIRS})
 
 
 
+
 add_executable(occupancyGrid src/occupancyGrid.cpp)
 target_link_libraries(occupancyGrid ${catkin_LIBRARIES})
 add_dependencies(occupancyGrid grid_based_mapping_tao_generate_messages_cpp)
@@ -195,6 +196,15 @@ add_dependencies(anchor_move_test grid_based_mapping_tao_generate_messages_cpp)
 add_executable(path src/path.cpp)
 target_link_libraries(path ${catkin_LIBRARIES})
 add_dependencies(path grid_based_mapping_tao_generate_messages_cpp)
+
+add_executable(ad_pa_fs_mapping src/ad_pa_fs_mapping.cpp)
+add_library(occupancyGrid2D src/occupancyGrid2D.cpp)
+
+target_link_libraries(ad_pa_fs_mapping
+ occupancyGrid2D
+  ${catkin_LIBRARIES}
+)
+add_dependencies(ad_pa_fs_mapping grid_based_mapping_tao_generate_messages_cpp)
 ## Declare a C++ library
 # add_library(${PROJECT_NAME}
 #   src/${PROJECT_NAME}/grid_based_mapping_tao.cpp
