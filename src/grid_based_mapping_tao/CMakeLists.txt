@@ -143,65 +143,15 @@ link_directories(${PCL_LIBRARY_DIRS})
 
 
 
-
-add_executable(occupancyGrid src/occupancyGrid.cpp)
-target_link_libraries(occupancyGrid ${catkin_LIBRARIES})
-add_dependencies(occupancyGrid grid_based_mapping_tao_generate_messages_cpp)
-
-
-add_executable(pcl2Grid src/pcl2Grid.cpp)
-target_link_libraries(pcl2Grid ${catkin_LIBRARIES})
-add_dependencies(pcl2Grid grid_based_mapping_tao_generate_messages_cpp)
-
-add_executable(mapping src/mapping.cpp)
-target_link_libraries(mapping ${catkin_LIBRARIES})
-add_dependencies(mapping grid_based_mapping_tao_generate_messages_cpp)
-
-add_executable(short src/short.cpp)
-target_link_libraries(short ${catkin_LIBRARIES})
-add_dependencies(short grid_based_mapping_tao_generate_messages_cpp)
-
-add_executable(2d src/2d.cpp)
-target_link_libraries(2d ${catkin_LIBRARIES})
-add_dependencies(2d grid_based_mapping_tao_generate_messages_cpp)
-
-add_executable(partialFreespace src/partialFreespace.cpp)
-target_link_libraries(partialFreespace ${catkin_LIBRARIES})
-add_dependencies(partialFreespace grid_based_mapping_tao_generate_messages_cpp)
-
-add_executable(test_ocm src/test_ocm.cpp)
-target_link_libraries(test_ocm ${catkin_LIBRARIES})
-add_dependencies(test_ocm grid_based_mapping_tao_generate_messages_cpp)
-
-add_executable(log src/log.cpp)
-target_link_libraries(log ${catkin_LIBRARIES})
-add_dependencies(log grid_based_mapping_tao_generate_messages_cpp)
-
-add_executable(filter0layer src/filter0layer.cpp)
-target_link_libraries(filter0layer ${catkin_LIBRARIES})
-add_dependencies(filter0layer grid_based_mapping_tao_generate_messages_cpp)
-
-add_executable(advanced_pF src/advanced_pF.cpp)
-target_link_libraries(advanced_pF ${catkin_LIBRARIES})
-add_dependencies(advanced_pF grid_based_mapping_tao_generate_messages_cpp)
-
-add_executable(keep0 src/keep0.cpp)
-target_link_libraries(keep0 ${catkin_LIBRARIES})
-add_dependencies(keep0 grid_based_mapping_tao_generate_messages_cpp)
-
-add_executable(anchor_move_test src/anchor_move_test.cpp)
-target_link_libraries(anchor_move_test ${catkin_LIBRARIES})
-add_dependencies(anchor_move_test grid_based_mapping_tao_generate_messages_cpp)
-
-add_executable(path src/path.cpp)
-target_link_libraries(path ${catkin_LIBRARIES})
-add_dependencies(path grid_based_mapping_tao_generate_messages_cpp)
-
 add_executable(ad_pa_fs_mapping src/ad_pa_fs_mapping.cpp)
 add_library(occupancyGrid2D src/occupancyGrid2D.cpp)
+add_library(vehicle src/vehicle.cpp)
+add_library(matlab_mimic src/matlab_mimic/matlab_mimic.cpp)
 
 target_link_libraries(ad_pa_fs_mapping
  occupancyGrid2D
+ vehicle
+ matlab_mimic
   ${catkin_LIBRARIES}
 )
 add_dependencies(ad_pa_fs_mapping grid_based_mapping_tao_generate_messages_cpp)

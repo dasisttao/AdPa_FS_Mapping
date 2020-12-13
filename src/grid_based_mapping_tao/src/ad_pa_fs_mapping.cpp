@@ -5,7 +5,8 @@
 #include <message_filters/sync_policies/approximate_time.h>
 #include <message_filters/sync_policies/exact_time.h>
 #include "occupancyGrid2D.hpp"
-
+#include "vehicle.hpp"
+#include "matlab_mimic/matlab_mimic.hpp"
 /*++++++++++++++++++++++++++This node is doing the following  jobs+++++++++++++++++++++++++++++++++++++++++
     
         Get Message from Topic /VehiclePoseFusionUTM so that we can get the car pose 
@@ -55,12 +56,6 @@ namespace TEASY_LASERS
 using namespace TEASY_LASERS;
 
 
-int sign(int x)
-{
-    if (x>0) return 1;
-    else if (x<0) return -1;
-    return 0;
-}
  //++++++++++++++++++++++++++++++++++++++++++++++++global varibale+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 Vehicle car;//create global object car 
@@ -97,7 +92,6 @@ void callback(const  geometry_msgs::PoseStamped::ConstPtr& pose_msg,const pcl::P
 void adjust_ACS();// according to the current pose of car,update the ACS anchor
 void anchor_init(const Vehicle& car);// according to the initial pose of car, initiliaze the ACS anchor. 
 void generate_car_cluster(double ego_x,double ego_y,double ego_yaw,double anchor_x,double ancor_y,std::vector<geometry_msgs::Point> &car_grid);
-std::vector<double> linspace(double a,double b, int n);
 void visualize_girdcells(const std::vector<geometry_msgs::Point>& cells,const std::string& frame_id,float grid_cell_width,float grid_cell_height,
                         ros::Publisher pub,double offset_x,double offset_y);
 
@@ -518,17 +512,6 @@ void generate_car_cluster(double ego_x,double ego_y,double ego_yaw,double anchor
 }
 
 
-std::vector<double> linspace(double a,double b, int n)
-{
-  std::vector<double> array;
-  double step=(b-a)/(n-1);
-  while(a<=b)
-    {
-      array.push_back(a);
-      a+=step;
-    }
-  return array;
-}
 
 
 
@@ -641,8 +624,8 @@ void ray_casting_points(uint8_t(*ray_casting)[GRID_SIZE_X][GRID_SIZE_Y],uint8_t(
       int32_t dy=round(yend-ystart);
 
  
-      int incx=sign(dx);
-      int incy=sign(dy);
+      int8_t incx=sign(dx);
+      int8_t incy=sign(dy);
       
       int pdx;
       int pdy;
@@ -799,8 +782,8 @@ void create_freespace(uint8_t (*pcl_grid)[GRID_SIZE_X][GRID_SIZE_Y],float (*curr
             int32_t dy=round(yend-ystart);
 
     
-            int incx=sign(dx);
-            int incy=sign(dy);
+            int8_t incx=sign(dx);
+            int8_t incy=sign(dy);
             
             int pdx;
             int pdy;
