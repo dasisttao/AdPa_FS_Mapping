@@ -1,7 +1,7 @@
 #ifndef VEHICLE_HPP_INCLUDE
 #define VEHICLE_HPP_INCLUDE
 #include "grid_based_mapping_tao/parameter_grid.h"
-
+#include "matlab_mimic/matlab_mimic.hpp"
 class Vehicle{
 public:
   Vehicle()
@@ -34,6 +34,7 @@ private:
 };
 
 
+void generate_car_cluster(double ego_x,double ego_y,double ego_yaw,double anchor_x,double ancor_y,std::vector<geometry_msgs::Point> &car_grid);
 
 
 

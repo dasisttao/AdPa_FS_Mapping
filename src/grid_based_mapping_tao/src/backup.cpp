@@ -57,6 +57,8 @@ using namespace TEASY_LASERS;
 
 Vehicle car;//create global object car 
 
+float temp[GRID_SIZE_X][GRID_SIZE_Y];
+
 
 bool if_get_new_data {false};
 
@@ -127,6 +129,10 @@ int main(int argc, char **argv)
     for(int i=0;i<GRID_SIZE_X;i++)
         for(int j=0;j<GRID_SIZE_Y;j++)
             history_grid[i][j]=l[probability::unknown];
+    
+    for(int i=0;i<GRID_SIZE_X;i++)
+        for(int j=0;j<GRID_SIZE_Y;j++)
+            temp[i][j]=l[probability::unknown];
 
     uint8_t pcl_grid[GRID_SIZE_X][GRID_SIZE_Y];
     for(int i=0;i<GRID_SIZE_X;i++)
@@ -166,13 +172,6 @@ int main(int argc, char **argv)
     ROS_INFO("Car position ( %f, %f ) ",car.get_x(),car.get_y());
     ROS_INFO("Anchor init_postion ( %f, %f )",acs.get_current_anchor_x(),acs.get_current_anchor_y());
     ROS_INFO("difference ( %f, %f ) ",car.get_x()-acs.get_current_anchor_x(),car.get_y()-acs.get_current_anchor_y());
-
-    geometry_msgs::Pose og_origin;
-    og_origin.position.x=acs.get_current_anchor_x()-VISUAL_OFFSET_X;
-    og_origin.position.y=acs.get_current_anchor_y()-VISUAL_OFFSET_Y;
-    og_origin.position.z=0.0; 
-    oG2D oG2D(0.1,GRID_SIZE_X,GRID_SIZE_Y,og_origin);
-
     while(ros::ok())
     {
         ros::spinOnce();//call all the callbacks waiting to be called at that point in time.
@@ -183,8 +182,10 @@ int main(int argc, char **argv)
             og_origin.position.x=acs.get_current_anchor_x()-VISUAL_OFFSET_X;
             og_origin.position.y=acs.get_current_anchor_y()-VISUAL_OFFSET_Y;
             og_origin.position.z=0.0;  
-            oG2D.setOrigin(og_origin);
+            oG2D oG2D(0.1,GRID_SIZE_X,GRID_SIZE_Y,og_origin);
 
+
+           
             geometry_msgs::Point cluster_point; //One point to be used as argument for all vectors push back
 
             //anchor++++
@@ -277,71 +278,172 @@ int main(int argc, char **argv)
 }
 
 
+  
+
+
 void update_grid_when_anchor_moved(float (*grid)[GRID_SIZE_X][GRID_SIZE_Y],float new_are_fullfill,const ABC& acs)
 {
     if((acs.get_current_anchor_x()==acs.get_history_anchor_x())&&(acs.get_current_anchor_y()==acs.get_history_anchor_y()))
-    {
-        return;
-    }
+    {return;}
+
+    uint16_t grid_trans_y=std::abs((acs.get_current_anchor_x()-acs.get_history_anchor_x())/GRID_SPACING);
+    uint16_t grid_trans_x=std::abs((acs.get_current_anchor_y()-acs.get_history_anchor_y())/GRID_SPACING);
+
     if(acs.get_current_anchor_x()<acs.get_history_anchor_x())
     {
-        ROS_INFO("anchor moved left");
-        for(auto i=acs.get_grid_trans_x_cell();i>=0;i--)
+        for(auto i=GRID_SIZE_X-1;i>=grid_trans_x;i--)
             for(auto j=0;j<GRID_SIZE_Y;j++)
-            {
+            { 
+                (*grid)[i][j]=(*grid)[i-grid_trans_x][j];
+            }
+
+        for(auto i=grid_trans_x-1;i>=0;i--)
+            for(auto j=0;j<GRID_SIZE_Y;j++)
+            { 
                 (*grid)[i][j]=new_are_fullfill;
-            }
-        for(auto i=GRID_SIZE_X-1;i>acs.get_grid_trans_x_cell();i--)
-            for(auto j=0;j<GRID_SIZE_Y;j++)
-            {
-                (*grid)[i][j]=(*grid)[i-acs.get_grid_trans_x_cell()][j];
-            }
+            }         
     }
+        
     else if(acs.get_current_anchor_x()>acs.get_history_anchor_x())
     {
-        ROS_INFO("anchor moved right");
-        for(auto i=GRID_SIZE_X-1-acs.get_grid_trans_x_cell();i<=GRID_SIZE_X-1;i++)
+        for(auto i=0;i<GRID_SIZE_X-grid_trans_x;i++)
             for(auto j=0;j<GRID_SIZE_Y;j++)
-            {
+            { 
+                (*grid)[i][j]=(*grid)[i+grid_trans_x][j];
+            }
+
+        for(auto i=GRID_SIZE_X-grid_trans_x;i<GRID_SIZE_X;i++)
+            for(auto j=0;j<GRID_SIZE_Y;j++)
+            { 
                 (*grid)[i][j]=new_are_fullfill;
-            }
-        for(auto i=0;i<GRID_SIZE_X-1-acs.get_grid_trans_x_cell();i++)
-            for(auto j=0;j<GRID_SIZE_Y;j++)
-            {
-                (*grid)[i][j]=(*grid)[i+acs.get_grid_trans_x_cell()][j];
-            }
+            }  
+
     }
     if(acs.get_current_anchor_y()<acs.get_history_anchor_y())
     {
-        ROS_INFO("anchor moved down");
         for(auto i=0;i<GRID_SIZE_X;i++)
-            for(auto j=acs.get_grid_trans_y_cell();j>=0;j--)
-            {
+            for(auto j=GRID_SIZE_Y-1;j>=grid_trans_y;j--)
+            { 
+                (*grid)[i][j]=(*grid)[i][j-grid_trans_y];
+            }
+
+        for(auto i=0;i<GRID_SIZE_X;i++)
+            for(auto j=grid_trans_y-1;j>=0;j--)
+            { 
                 (*grid)[i][j]=new_are_fullfill;
             }
-        for(auto i=0;i<GRID_SIZE_X;i++)
-            for(auto j=GRID_SIZE_Y-1;j>acs.get_grid_trans_y_cell();j--)
-            {
-                (*grid)[i][j]=(*grid)[i][j-acs.get_grid_trans_y_cell()];
-            }
     }
+        
     else if(acs.get_current_anchor_y()>acs.get_history_anchor_y())
     {
-        ROS_INFO("anchor moved up");
         for(auto i=0;i<GRID_SIZE_X;i++)
-            for(auto j=GRID_SIZE_Y-1-acs.get_grid_trans_y_cell();j<=GRID_SIZE_Y-1;j++)
-            {
+            for(auto j=0;j<GRID_SIZE_Y-grid_trans_y;j++)
+            { 
+                (*grid)[i][j]=(*grid)[i][j+grid_trans_y];
+            }
+          
+        
+        for(auto i=0;i<GRID_SIZE_X;i++)
+            for(auto j=GRID_SIZE_Y-grid_trans_y;j<GRID_SIZE_Y;j++)
+            { 
                 (*grid)[i][j]=new_are_fullfill;
-            }
-
-        for(auto i=0;i<GRID_SIZE_X;i++)
-            for(auto j=0;j<GRID_SIZE_Y-1-acs.get_grid_trans_y_cell();j++)
-            {
-                (*grid)[i][j]=(*grid)[i][j+acs.get_grid_trans_y_cell()];
-            }
+            }         
     }
+    
 }
 
+
+/*
+void update_grid_when_anchor_moved(float (*grid)[GRID_SIZE_X][GRID_SIZE_Y],float new_are_fullfill,const ABC& acs)
+{
+    if((acs.get_current_anchor_x()==acs.get_history_anchor_x())&&(acs.get_current_anchor_y()==acs.get_history_anchor_y()))
+    {return;}
+
+    uint16_t grid_trans_y=std::abs((acs.get_current_anchor_x()-acs.get_history_anchor_x())/GRID_SPACING);
+    uint16_t grid_trans_x=std::abs((acs.get_current_anchor_y()-acs.get_history_anchor_y())/GRID_SPACING);
+
+    if(acs.get_current_anchor_x()<acs.get_history_anchor_x())
+    {
+        for(int i=grid_trans_x;i<GRID_SIZE_X;i++)
+            for(int j=0;j<GRID_SIZE_Y;j++)
+            { 
+                //(*grid)[i][j]=(*grid)[i-grid_trans_x][j];
+                temp[i][j]=(*grid)[i-grid_trans_x][j];
+            }
+
+        for(int i=0;i<grid_trans_x;i++)
+            for(int j=0;j<GRID_SIZE_Y;j++)
+            { 
+                //(*grid)[i][j]=new_are_fullfill;
+                 temp[i][j]=new_are_fullfill;
+            }         
+    }
+        
+    else if(acs.get_current_anchor_x()>acs.get_history_anchor_x())
+    {
+        for(int i=0;i<GRID_SIZE_X-grid_trans_x;i++)
+            for(int j=0;j<GRID_SIZE_Y;j++)
+            { 
+                //(*grid)[i][j]=(*grid)[i+grid_trans_x][j];
+                temp[i][j]=(*grid)[i+grid_trans_x][j];
+            }
+
+        for(int i=GRID_SIZE_X-grid_trans_x;i<GRID_SIZE_X;i++)
+            for(int j=0;j<GRID_SIZE_Y;j++)
+            { 
+                //(*grid)[i][j]=new_are_fullfill;
+                temp[i][j]=new_are_fullfill;
+            }  
+
+    }
+    for(int i=0;i<GRID_SIZE_X-grid_trans_x;i++)
+            for(int j=0;j<GRID_SIZE_Y;j++)
+            {
+                (*grid)[i][j]=temp[i][j];
+            }
+    if(acs.get_current_anchor_y()<acs.get_history_anchor_y())
+    {
+        for(int i=0;i<GRID_SIZE_X;i++)
+            for(int j=grid_trans_y;j<GRID_SIZE_Y;j++)
+            { 
+                //(*grid)[i][j]=(*grid)[i][j-grid_trans_y];
+                temp[i][j]=(*grid)[i][j-grid_trans_y];
+            }
+
+        for(int i=0;i<GRID_SIZE_X;i++)
+            for(int j=0;j<grid_trans_y;j++)
+            { 
+                //(*grid)[i][j]=new_are_fullfill;
+                temp[i][j]=new_are_fullfill;
+            }
+    }
+        
+    else if(acs.get_current_anchor_y()>acs.get_history_anchor_y())
+    {
+        for(int i=0;i<GRID_SIZE_X;i++)
+            for(int j=0;j<GRID_SIZE_Y-grid_trans_y;j++)
+            { 
+                //(*grid)[i][j]=(*grid)[i][j+grid_trans_y];
+                temp[i][j]=(*grid)[i][j+grid_trans_y];
+            }
+          
+        
+        for(int i=0;i<GRID_SIZE_X;i++)
+            for(int j=GRID_SIZE_Y-grid_trans_y;j<GRID_SIZE_Y;j++)
+            { 
+                //(*grid)[i][j]=new_are_fullfill;
+                temp[i][j]=new_are_fullfill;
+            }         
+    }
+
+    for(int i=0;i<GRID_SIZE_X-grid_trans_x;i++)
+            for(int j=0;j<GRID_SIZE_Y;j++)
+            {
+                (*grid)[i][j]=temp[i][j];
+            }
+    
+}
+ */
 
 
 
@@ -350,10 +452,10 @@ void anchor_init(const Vehicle& car,ABC& acs)
     //Make the anchor near the car so that it could quickly determine its initilazied position and make sure it is 10*Z number
     acs.set_history_anchor_x(double(static_cast<int64_t>(car.get_x())/10)*10.0);
     acs.set_history_anchor_y(double(static_cast<int64_t>(car.get_y())/10)*10.0);
-    while(  (car.get_x()< acs.get_current_anchor_x()+acs.get_borderoFcar_x1_m())||
-            (car.get_x()>acs.get_current_anchor_x()+acs.get_borderoFcar_x2_m())||
-            (car.get_y()<acs.get_current_anchor_y()+acs.get_borderoFcar_y1_m())||
-            (car.get_y()>acs.get_current_anchor_y()+acs.get_borderoFcar_y2_m())
+    while(  (car.get_x()< acs.get_current_anchor_x()+acs.get_borderoFcar_x1())||
+            (car.get_x()>acs.get_current_anchor_x()+acs.get_borderoFcar_x2())||
+            (car.get_y()<acs.get_current_anchor_y()+acs.get_borderoFcar_y1())||
+            (car.get_y()>acs.get_current_anchor_y()+acs.get_borderoFcar_y2())
         )
     {
         adjust_ACS(acs);
@@ -371,43 +473,43 @@ void anchor_init(const Vehicle& car,ABC& acs)
 void adjust_ACS(ABC &acs)
 {
     //adjust the anchor of ACS if it is necessary
-    if (car.get_x()<(acs.get_current_anchor_x()+acs.get_borderoFcar_x1_m()))
+    if (car.get_x()<(acs.get_current_anchor_x()+acs.get_borderoFcar_x1()))
     {
-        acs.set_current_anchor_x(acs.get_current_anchor_x()-acs.get_grid_trans_x_m());
+        acs.set_current_anchor_x(acs.get_current_anchor_x()-acs.get_grid_trans_x());
     }
-    else if (car.get_x()>(acs.get_current_anchor_x()+acs.get_borderoFcar_x2_m()))
+    else if (car.get_x()>(acs.get_current_anchor_x()+acs.get_borderoFcar_x2()))
     {
-        acs.set_current_anchor_x(acs.get_current_anchor_x()+acs.get_grid_trans_x_m());
+        acs.set_current_anchor_x(acs.get_current_anchor_x()+acs.get_grid_trans_x());
     }
-    if(car.get_y()<(acs.get_current_anchor_y()+acs.get_borderoFcar_y1_m()))
+    if(car.get_y()<(acs.get_current_anchor_y()+acs.get_borderoFcar_y1()))
     {
-        acs.set_current_anchor_y(acs.get_current_anchor_y()-acs.get_grid_trans_y_m());
+        acs.set_current_anchor_y(acs.get_current_anchor_y()-acs.get_grid_trans_y());
     }
-    else if(car.get_y()>(acs.get_current_anchor_y()+acs.get_borderoFcar_y2_m()))
+    else if(car.get_y()>(acs.get_current_anchor_y()+acs.get_borderoFcar_y2()))
     {
-        acs.set_current_anchor_y(acs.get_current_anchor_y()+acs.get_grid_trans_y_m());
+        acs.set_current_anchor_y(acs.get_current_anchor_y()+acs.get_grid_trans_y());
     }
 }
 
 void adjust_ACS(ABC* acs)
 {
     //adjust the anchor of ACS if it is necessary
-    if (car.get_x()<(acs->get_current_anchor_x()+acs->get_borderoFcar_x1_m()))
+    if (car.get_x()<(acs->get_current_anchor_x()+acs->get_borderoFcar_x1()))
     {
-        acs->set_current_anchor_x(acs->get_current_anchor_x()-acs->get_grid_trans_x_m());
+        acs->set_current_anchor_x(acs->get_current_anchor_x()-acs->get_grid_trans_x());
     }
-    else if (car.get_x()>(acs->get_current_anchor_x()+acs->get_borderoFcar_x2_m()))
+    else if (car.get_x()>(acs->get_current_anchor_x()+acs->get_borderoFcar_x2()))
     {
-        acs->set_current_anchor_x(acs->get_current_anchor_x()+acs->get_grid_trans_x_m());
+        acs->set_current_anchor_x(acs->get_current_anchor_x()+acs->get_grid_trans_x());
     }
-    if(car.get_y()<(acs->get_current_anchor_y()+acs->get_borderoFcar_y1_m()))
+    if(car.get_y()<(acs->get_current_anchor_y()+acs->get_borderoFcar_y1()))
     {
-        acs->set_current_anchor_y(acs->get_current_anchor_y()-acs->get_grid_trans_y_m());
+        acs->set_current_anchor_y(acs->get_current_anchor_y()-acs->get_grid_trans_y());
     }
     
-    else if(car.get_y()>(acs->get_current_anchor_y()+acs->get_borderoFcar_y2_m()))
+    else if(car.get_y()>(acs->get_current_anchor_y()+acs->get_borderoFcar_y2()))
     {
-        acs->set_current_anchor_y(acs->get_current_anchor_y()+acs->get_grid_trans_y_m());
+        acs->set_current_anchor_y(acs->get_current_anchor_y()+acs->get_grid_trans_y());
     }
 }
 

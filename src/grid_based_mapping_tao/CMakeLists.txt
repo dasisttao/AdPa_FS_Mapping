@@ -147,11 +147,14 @@ add_executable(ad_pa_fs_mapping src/ad_pa_fs_mapping.cpp)
 add_library(occupancyGrid2D src/occupancyGrid2D.cpp)
 add_library(vehicle src/vehicle.cpp)
 add_library(matlab_mimic src/matlab_mimic/matlab_mimic.cpp)
+add_library(some_visualization src/visualization/some_visualization.cpp)
+add_library(some_visualization src/visualization/some_visualization.cpp)
 
 target_link_libraries(ad_pa_fs_mapping
  occupancyGrid2D
  vehicle
  matlab_mimic
+ some_visualization
   ${catkin_LIBRARIES}
 )
 add_dependencies(ad_pa_fs_mapping grid_based_mapping_tao_generate_messages_cpp)

@@ -1,0 +1,13 @@
+#probability of occupation of one grid
+
+
+#max probability
+p_max:  99
+#min probability
+p_min:  1
+#probability when unknown
+p_unknown:  50
+#probability when test a grid once
+p_fill: 90
+#probability when test not grid 
+p_clear: 20
