@@ -1,0 +1,883 @@
+#include "grid_based_mapping_tao/parameter_grid.h"
+#include <pcl/filters/statistical_outlier_removal.h>
+#include <message_filters/subscriber.h>
+#include <message_filters/time_synchronizer.h>
+#include <message_filters/sync_policies/approximate_time.h>
+#include <message_filters/sync_policies/exact_time.h>
+#include "vehicle.hpp"
+
+double z_g_max=0;
+double z_g_min=0;
+/*++++++++++++++++++++++++++This node is doing the following  jobs+++++++++++++++++++++++++++++++++++++++++
+    
+        Get Message from Topic /VehiclePoseFusionUTM so that we can get the car pose 
+        Get Message from Topic /as_tx/point_cloud so that we can get the pcl message
+
+        Let pcl discretized in grid and use bayes filter to estimate the probabilty of the occupization
+
+
+      Publish the Message to Topic /data2visual so that we can visualize it with rviz.The Message conatains
+      car cluster, anchor position and occupancygrid(history_grid)(by a varibale of type std_msgs/UInt8MultiArray)
+
+ ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++*/
+
+
+ //++++++++++++++++++++++++++++++++++++++++++++++++CONFIG/PARAMETER++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+uint64_t allowed_diff_ts_ns=25000;//0.025s -the allowed difference of timestamp between msg of car_pose and msg of pcl2
+const uint8_t binary_threshold {50};
+namespace TEASY_LASERS
+{
+  double DMAX=10; //max distannce of reachement
+  double DMIN=3;
+  std::vector<double> laser_x {+3.6,-1.0,+3.3,+3.3,-0.5,-0.5}; //In VCS Vehicle Coordinate System
+  std::vector<double> laser_y {+0.0,+0.0,-0.8,+0.8,-0.8,+0.8};
+  std::vector<double> laser_yaw {-45*M_PI/180,-225*M_PI/180,-125*M_PI/180,35*M_PI/180,-145*M_PI/180,55*M_PI/180};
+
+  //std::vector<double> laser_x {+3.6,+3.3}; //In VCS Vehicle Coordinate System
+  //std::vector<double> laser_y {+0.0,-0.8};
+  //std::vector<double> laser_yaw {-45*M_PI/180,-125*M_PI/180};
+
+  double angle_resolution=GRID_SPACING/DMAX;
+  uint32_t radiation_num=static_cast<uint32_t>(2*M_PI/angle_resolution);
+  uint8_t radiation_num_divder=4;
+
+}
+
+using namespace TEASY_LASERS;
+
+ //++++++++++++++++++++++++++++++++++++++++++++++++global varibale+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+Vehicle car;//create global object car 
+
+bool if_get_new_data {false};
+
+//++++++++++++++++++++++++++++Paramenter for Anchor Corrdinate System unit[m] relateive to utm origin+++++++++++++++++++++++++++++++++
+
+namespace ACS
+{
+  //This is the origin of anchor coordinate system
+  double anchor_x {0.0};
+  double anchor_y {0.0};
+
+  double history_anchor_x {0.0};
+  double history_anchor_y {0.0};
+
+  //This is border of car movement enviroment to make sure the car is alwasy on the center of the Gird
+  double grid_border_x1=(GRID_SIZE_X*100/400)*GRID_SPACING;
+  double grid_border_x2=(GRID_SIZE_X*300/400)*GRID_SPACING;
+  double grid_border_y1=(GRID_SIZE_Y*100/400)*GRID_SPACING;
+  double grid_border_y2=(GRID_SIZE_Y*300/400)*GRID_SPACING;
+  
+
+  double grid_trans_x=grid_border_x2-grid_border_x1;
+  double grid_trans_y=grid_border_y2-grid_border_y1;
+}
+
+
+//++++++++++++++++++++++++++++++++++++++++++++++++++Functions++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+void update_grid_when_anchor_moved(uint8_t (*grid)[GRID_SIZE_X][GRID_SIZE_Y]);// according to the change ACS anchor, update the grid.
+void callback(const  geometry_msgs::PoseStamped::ConstPtr& pose_msg,const pcl::PointCloud<pcl::PointXYZL>::ConstPtr& pcl_msg,uint8_t (*current_grid)[GRID_SIZE_X][GRID_SIZE_Y]);
+void adjust_ACS();// according to the current pose of car,update the ACS anchor
+void anchor_init(const Vehicle& car);// according to the initial pose of car, initiliaze the ACS anchor. 
+void generate_car_cluster(double ego_x,double ego_y,double ego_yaw,double anchor_x,double ancor_y,std::vector<geometry_msgs::Point> &car_grid);
+std::vector<double> linspace(double a,double b, int n);
+void visualize_girdcells(const std::vector<geometry_msgs::Point>& cells,const std::string& frame_id,float grid_cell_width,float grid_cell_height,
+                        ros::Publisher pub,double offset_x,double offset_y);
+
+
+//++++++++++++++++++++++++++++++++++++++++++++++++++MAIN++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+int main(int argc, char **argv)
+{
+  uint8_t current_grid[GRID_SIZE_X][GRID_SIZE_Y];
+  for(int i=0;i<GRID_SIZE_X;i++)
+    for(int j=0;j<GRID_SIZE_Y;j++)
+     current_grid[i][j]=50;
+
+  uint8_t history_grid[GRID_SIZE_X][GRID_SIZE_Y];
+  for(int i=0;i<GRID_SIZE_X;i++)
+    for(int j=0;j<GRID_SIZE_Y;j++)
+     history_grid[i][j]=50;
+
+  uint8_t ray_casting[GRID_SIZE_X][GRID_SIZE_Y];
+  for(int i=0;i<GRID_SIZE_X;i++)
+    for(int j=0;j<GRID_SIZE_Y;j++)
+     ray_casting[i][j]=50;
+
+  uint8_t pcl_grid[GRID_SIZE_X][GRID_SIZE_Y];
+  for(int i=0;i<GRID_SIZE_X;i++)
+    for(int j=0;j<GRID_SIZE_Y;j++)
+     pcl_grid[i][j]=50;
+  
+  ros::init(argc,argv,"pcl2Grid");
+  ros::NodeHandle nh;
+  ros::Rate loop_rate(12.5);
+
+  uint8_t (*current_grid_pointer)[GRID_SIZE_X][GRID_SIZE_Y]=&current_grid;
+  uint8_t (*history_grid_pointer)[GRID_SIZE_X][GRID_SIZE_Y]=&history_grid;
+  uint8_t (*ray_casting_pointer)[GRID_SIZE_X][GRID_SIZE_Y]=&ray_casting;
+  uint8_t (*pcl_grid_pointer)[GRID_SIZE_X][GRID_SIZE_Y]=&pcl_grid;
+
+  message_filters::Subscriber<geometry_msgs::PoseStamped> pose_sub(nh,"/VehiclePoseFusionUTM",1000);
+  message_filters::Subscriber<pcl::PointCloud<pcl::PointXYZL>> pcl_sub(nh,"/as_tx/point_cloud",1000);
+  typedef message_filters::sync_policies::ApproximateTime<geometry_msgs::PoseStamped, pcl::PointCloud<pcl::PointXYZL>> MySyncPolicy;
+  message_filters::Synchronizer<MySyncPolicy> sync(MySyncPolicy(10),pose_sub,pcl_sub);
+  sync.registerCallback(boost::bind(&callback, _1, _2,pcl_grid_pointer));
+
+  ros::Publisher car_pub = nh.advertise<nav_msgs::GridCells>("car_visual",1000);
+  ros::Publisher anchor_pub = nh.advertise<nav_msgs::GridCells>("acs_visual",1000);
+  ros::Publisher occupied_area_pub = nh.advertise<nav_msgs::GridCells>("occupied_area",1000);
+  ros::Publisher ray_casting_pub = nh.advertise<nav_msgs::GridCells>("ray_casting",1000);
+  ros::Publisher occupied_area_pub0 = nh.advertise<nav_msgs::GridCells>("occupied_area0",1000);
+  ros::Publisher occupied_area_pub1 = nh.advertise<nav_msgs::GridCells>("occupied_area1",1000);
+  ros::Publisher occupied_area_pub2 = nh.advertise<nav_msgs::GridCells>("occupied_area2",1000);
+  ros::Publisher occupied_area_pub3 = nh.advertise<nav_msgs::GridCells>("occupied_area3",1000);
+  ros::Publisher occupied_area_pub4 = nh.advertise<nav_msgs::GridCells>("occupied_area4",1000);
+  ros::Publisher occupied_area_pub5 = nh.advertise<nav_msgs::GridCells>("occupied_area5",1000);
+  ros::Publisher occupied_area_pub6 = nh.advertise<nav_msgs::GridCells>("occupied_area6",1000);
+  ros::Publisher occupied_area_pub7 = nh.advertise<nav_msgs::GridCells>("occupied_area7",1000);
+  ros::Publisher occupied_area_pub8 = nh.advertise<nav_msgs::GridCells>("occupied_area8",1000);
+  //Wait a valid msg and then initialize the anchor position
+  ROS_INFO("Waiting message... ...");
+  while(ros::ok())
+  {
+      //ROS_INFO("(x,y,yaw)=( %f, %f, %f )",car.get_x(),car.get_y(),car.get_psi());
+      if (car.get_x()!=0.0)
+      {
+        break;
+      }    
+    ros::spinOnce();
+    loop_rate.sleep();
+  }
+  ROS_INFO("Message arrived!");
+  anchor_init(car);
+  //ROS_INFO("Anchor init_postion ( %f, %f )",ACS::anchor_x,ACS::anchor_y);
+
+  while(ros::ok())
+  {
+    ros::spinOnce();//call all the callbacks waiting to be called at that point in time.
+
+    if(if_get_new_data==true)
+    {
+      geometry_msgs::Point cluster_point; //One point to be used as argument for all vectors push back
+
+      //anchor++++
+      std::vector<geometry_msgs::Point> anchor_cluster;
+      cluster_point.x=ACS::anchor_x;
+      cluster_point.y=ACS::anchor_y;
+      cluster_point.z=0.0;   
+      anchor_cluster.push_back(cluster_point);
+
+      cluster_point.x=cluster_point.x+GRID_SIZE_X*GRID_SPACING;
+      cluster_point.y=cluster_point.y+GRID_SIZE_Y*GRID_SPACING;
+      cluster_point.z=0.0; 
+      anchor_cluster.push_back(cluster_point);
+
+      //car++++
+      std::vector<geometry_msgs::Point> car_grid;
+      generate_car_cluster(car.get_x(),car.get_y(),car.get_psi(),ACS::anchor_x,ACS::anchor_y,car_grid);
+      /* 
+      for(int i=0;i<car_grid.size();i++)
+      {
+       current_grid[uint16_t(car_grid[i].x)][uint16_t(car_grid[i].y)]=10;
+      }
+        */
+      std::vector<geometry_msgs::Point> car_cluster;
+      for(int i=0;i<car_grid.size();i++)
+      {
+      cluster_point.x=car_grid[i].x*GRID_SPACING+ACS::anchor_x;
+      cluster_point.y=car_grid[i].y*GRID_SPACING+ACS::anchor_y;
+      cluster_point.z=0.0; 
+      car_cluster.push_back(cluster_point);
+      }
+
+      //update_grid_when_anchor_moved(history_grid_pointer);
+
+      //ray_casting_points(ray_casting_pointer,pcl_grid_pointer,current_grid_pointer);
+
+      std::vector<geometry_msgs::Point> occupied_grids_0;
+      std::vector<geometry_msgs::Point> occupied_grids_1;
+      std::vector<geometry_msgs::Point> occupied_grids_2;
+      std::vector<geometry_msgs::Point> occupied_grids_3;
+      std::vector<geometry_msgs::Point> occupied_grids_4;
+      std::vector<geometry_msgs::Point> occupied_grids_5;
+      std::vector<geometry_msgs::Point> occupied_grids_6;
+      std::vector<geometry_msgs::Point> occupied_grids_7;
+      std::vector<geometry_msgs::Point> occupied_grids_8;
+
+      std::vector<geometry_msgs::Point> ray;
+
+      for(int i=0;i<GRID_SIZE_X;i++)
+        for(int j=0;j<GRID_SIZE_Y;j++)
+          {
+            if(pcl_grid[i][j]==10)//grid[i][j]=g_data.array.data[i*GRID_SIZE_Y+j];
+            {
+               
+              cluster_point.x=ACS::anchor_x+i*GRID_SPACING;
+              cluster_point.y=ACS::anchor_y+j*GRID_SPACING;
+              cluster_point.z=0.0;
+              occupied_grids_0.push_back(cluster_point);
+            }
+            else if(pcl_grid[i][j]==1)//grid[i][j]=g_data.array.data[i*GRID_SIZE_Y+j];
+            {
+               
+              cluster_point.x=ACS::anchor_x+i*GRID_SPACING;
+              cluster_point.y=ACS::anchor_y+j*GRID_SPACING;
+              cluster_point.z=0.0;
+              occupied_grids_1.push_back(cluster_point);
+            }
+            else if(pcl_grid[i][j]==2)//grid[i][j]=g_data.array.data[i*GRID_SIZE_Y+j];
+            {
+               
+              cluster_point.x=ACS::anchor_x+i*GRID_SPACING;
+              cluster_point.y=ACS::anchor_y+j*GRID_SPACING;
+              cluster_point.z=0.0;
+              occupied_grids_2.push_back(cluster_point);
+            }
+            else if(pcl_grid[i][j]==3)//grid[i][j]=g_data.array.data[i*GRID_SIZE_Y+j];
+            {
+               
+              cluster_point.x=ACS::anchor_x+i*GRID_SPACING;
+              cluster_point.y=ACS::anchor_y+j*GRID_SPACING;
+              cluster_point.z=0.0;
+              occupied_grids_3.push_back(cluster_point);
+            }
+            else if(pcl_grid[i][j]==4)//grid[i][j]=g_data.array.data[i*GRID_SIZE_Y+j];
+            {
+               
+              cluster_point.x=ACS::anchor_x+i*GRID_SPACING;
+              cluster_point.y=ACS::anchor_y+j*GRID_SPACING;
+              cluster_point.z=0.0;
+              occupied_grids_4.push_back(cluster_point);
+            }
+            else if(pcl_grid[i][j]==5)//grid[i][j]=g_data.array.data[i*GRID_SIZE_Y+j];
+            {
+               
+              cluster_point.x=ACS::anchor_x+i*GRID_SPACING;
+              cluster_point.y=ACS::anchor_y+j*GRID_SPACING;
+              cluster_point.z=0.0;
+              occupied_grids_5.push_back(cluster_point);
+            }
+            else if(pcl_grid[i][j]==6)//grid[i][j]=g_data.array.data[i*GRID_SIZE_Y+j];
+            {
+               
+              cluster_point.x=ACS::anchor_x+i*GRID_SPACING;
+              cluster_point.y=ACS::anchor_y+j*GRID_SPACING;
+              cluster_point.z=0.0;
+              occupied_grids_6.push_back(cluster_point);
+            }
+            else if(pcl_grid[i][j]==7)//grid[i][j]=g_data.array.data[i*GRID_SIZE_Y+j];
+            {
+               
+              cluster_point.x=ACS::anchor_x+i*GRID_SPACING;
+              cluster_point.y=ACS::anchor_y+j*GRID_SPACING;
+              cluster_point.z=0.0;
+              occupied_grids_7.push_back(cluster_point);
+            }
+            else if(pcl_grid[i][j]==8)//grid[i][j]=g_data.array.data[i*GRID_SIZE_Y+j];
+            {
+               
+              cluster_point.x=ACS::anchor_x+i*GRID_SPACING;
+              cluster_point.y=ACS::anchor_y+j*GRID_SPACING;
+              cluster_point.z=0.0;
+              occupied_grids_8.push_back(cluster_point);
+            }
+             /* 
+            if(ray_casting[i][j]==90)
+            {
+              cluster_point.x=ACS::anchor_x+i*GRID_SPACING;
+              cluster_point.y=ACS::anchor_y+j*GRID_SPACING;
+              cluster_point.z=0.0;
+              ray.push_back(cluster_point);
+            }
+            */
+          }
+
+
+
+    visualize_girdcells(anchor_cluster,"map",float(1),float(1),anchor_pub,VISUAL_OFFSET_X,VISUAL_OFFSET_Y);
+    visualize_girdcells(car_cluster,"map",float(GRID_SPACING),float(GRID_SPACING),car_pub,VISUAL_OFFSET_X,VISUAL_OFFSET_Y);
+
+    visualize_girdcells(occupied_grids_0,"map",float(GRID_SPACING),float(GRID_SPACING),occupied_area_pub0,VISUAL_OFFSET_X,VISUAL_OFFSET_Y);
+    visualize_girdcells(occupied_grids_1,"map",float(GRID_SPACING),float(GRID_SPACING),occupied_area_pub1,VISUAL_OFFSET_X,VISUAL_OFFSET_Y);
+    visualize_girdcells(occupied_grids_2,"map",float(GRID_SPACING),float(GRID_SPACING),occupied_area_pub2,VISUAL_OFFSET_X,VISUAL_OFFSET_Y);
+    visualize_girdcells(occupied_grids_3,"map",float(GRID_SPACING),float(GRID_SPACING),occupied_area_pub3,VISUAL_OFFSET_X,VISUAL_OFFSET_Y);
+    visualize_girdcells(occupied_grids_4,"map",float(GRID_SPACING),float(GRID_SPACING),occupied_area_pub4,VISUAL_OFFSET_X,VISUAL_OFFSET_Y);
+    visualize_girdcells(occupied_grids_5,"map",float(GRID_SPACING),float(GRID_SPACING),occupied_area_pub5,VISUAL_OFFSET_X,VISUAL_OFFSET_Y);
+    visualize_girdcells(occupied_grids_6,"map",float(GRID_SPACING),float(GRID_SPACING),occupied_area_pub6,VISUAL_OFFSET_X,VISUAL_OFFSET_Y);
+    visualize_girdcells(occupied_grids_7,"map",float(GRID_SPACING),float(GRID_SPACING),occupied_area_pub7,VISUAL_OFFSET_X,VISUAL_OFFSET_Y);
+
+    //visualize_girdcells(ray,"map",float(GRID_SPACING),float(GRID_SPACING),ray_casting_pub,VISUAL_OFFSET_X,VISUAL_OFFSET_Y);
+
+        /* 
+    for(int i=0;i<GRID_SIZE_X;i++)
+        for(int j=0;j<GRID_SIZE_Y;j++)
+        {
+          //ray_casting[i][j]=50;
+          current_grid[i][j]=50;
+        }
+
+    */
+    ROS_INFO("Z MAX %f",z_g_max);
+    ROS_INFO("Z MIN%f",z_g_min);
+    ACS::history_anchor_x=ACS::anchor_x;
+    ACS::history_anchor_y=ACS::anchor_y;
+    if_get_new_data=false;
+    }
+
+
+  }
+
+
+
+
+}
+
+
+  
+
+
+
+
+
+
+
+
+//++++++++++++++++++++++++++++++++++++++++++++++++++Function definition++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+void update_grid_when_anchor_moved(uint8_t (*grid)[GRID_SIZE_X][GRID_SIZE_Y])
+{
+  if((ACS::anchor_x==ACS::history_anchor_x)&&(ACS::anchor_y==ACS::history_anchor_y))
+  {return;}
+
+  uint16_t grid_trans_y=std::abs((ACS::anchor_y-ACS::history_anchor_y)/GRID_SPACING);
+  uint16_t grid_trans_x=std::abs((ACS::anchor_x-ACS::history_anchor_x)/GRID_SPACING);
+
+  if(ACS::anchor_x<ACS::history_anchor_x)
+  {
+    for(int i=grid_trans_x;i<GRID_SIZE_X;i++)
+      for(int j=0;j<GRID_SIZE_Y;j++)
+      { 
+        (*grid)[i][j]=(*grid)[i-grid_trans_x][j];
+      }
+
+      for(int i=0;i<grid_trans_x;i++)
+        for(int j=0;j<GRID_SIZE_Y;j++)
+        { 
+          (*grid)[i][j]=50;
+        }         
+  }
+      
+  else if(ACS::anchor_x>ACS::history_anchor_x)
+    {
+      for(int i=0;i<GRID_SIZE_X-grid_trans_x;i++)
+        for(int j=0;j<GRID_SIZE_Y;j++)
+        { 
+          (*grid)[i][j]=(*grid)[i+grid_trans_x][j];
+        }
+
+      for(int i=GRID_SIZE_X-grid_trans_x;i<GRID_SIZE_X;i++)
+        for(int j=0;j<GRID_SIZE_Y;j++)
+        { 
+          (*grid)[i][j]=50;
+        }  
+
+    }
+  
+  if(ACS::anchor_y<ACS::history_anchor_y)
+    {
+      for(int i=0;i<GRID_SIZE_X;i++)
+        for(int j=grid_trans_y;j<GRID_SIZE_Y;j++)
+        { 
+         (*grid)[i][j]=(*grid)[i][j-grid_trans_y];
+        }
+
+      for(int i=0;i<GRID_SIZE_X;i++)
+        for(int j=0;j<grid_trans_y;j++)
+        { 
+          (*grid)[i][j]=50;
+        }
+    }
+      
+  else if(ACS::anchor_y>ACS::history_anchor_y)
+    {
+      
+        for(int i=0;i<GRID_SIZE_X;i++)
+          for(int j=0;j<GRID_SIZE_Y-grid_trans_y;j++)
+          { 
+            (*grid)[i][j]=(*grid)[i][j+grid_trans_y];
+          }
+          
+        
+        for(int i=0;i<GRID_SIZE_X;i++)
+          for(int j=GRID_SIZE_Y-grid_trans_y;j<GRID_SIZE_Y;j++)
+          { 
+            (*grid)[i][j]=50;
+          }         
+    }
+    
+}
+
+
+void anchor_init(const Vehicle& car)
+{
+  //Make the anchor near the car so that it could quickly determine its initilazied position and make sure it is 10*Z number
+  ACS::anchor_x= double(static_cast<int64_t>(car.get_x())/10)*10.0;
+  ACS::anchor_y= double(static_cast<int64_t>(car.get_y())/10)*10.0;
+
+  while((car.get_x()<ACS::anchor_x+ACS::grid_border_x1)||(car.get_x()>ACS::anchor_x+ACS::grid_border_x2)||(car.get_y()<ACS::anchor_y+ACS::grid_border_y1)||(car.get_x()>ACS::anchor_y+ACS::grid_border_y2))
+  {
+    adjust_ACS();
+  }
+
+  ACS::history_anchor_x=ACS::anchor_x;
+  ACS::history_anchor_y=ACS::anchor_y;
+
+}
+
+void adjust_ACS()
+{
+  /* 
+  if( (car.get_psi()>=22.5) && (car.get_psi()<=67.5) )
+    {
+      ACS::grid_border_x1=(GRID_SIZE_X*1/5)*GRID_SPACING;
+      ACS::grid_border_x2=(GRID_SIZE_X*2/5)*GRID_SPACING;
+      ACS::grid_border_y1=(GRID_SIZE_Y*1/5)*GRID_SPACING;
+      ACS::grid_border_y2=(GRID_SIZE_Y*2/5)*GRID_SPACING;
+    }
+    else if( (car.get_psi()>=67.5) && (car.get_psi()<=112.5) )
+    {
+      ACS::grid_border_x1=(GRID_SIZE_X*1/5)*GRID_SPACING;
+      ACS::grid_border_x2=(GRID_SIZE_X*2/5)*GRID_SPACING;;
+      ACS::grid_border_y1=(GRID_SIZE_Y*2/5)*GRID_SPACING;
+      ACS::grid_border_y2=55;
+    }
+    else if( (car.get_psi()>=112.5) && (car.get_psi()<=157.5) )
+    {
+      ACS::grid_border_x1=20;
+      ACS::grid_border_x2=30;
+      ACS::grid_border_y1=70;
+      ACS::grid_border_y2=80;
+    }
+    else if( (car.get_psi()>=157.5) && (car.get_psi()<=202.5) )
+    {
+      ACS::grid_border_x1=45;
+      ACS::grid_border_x2=55;
+      ACS::grid_border_y1=70;
+      ACS::grid_border_y2=80;
+    }
+    else if( (car.get_psi()>=202.5) && (car.get_psi()<=247.5) )
+    {
+      ACS::grid_border_x1=70;
+      ACS::grid_border_x2=80;
+      ACS::grid_border_y1=70;
+      ACS::grid_border_y2=80;
+    }
+    else if( (car.get_psi()>=247.5) && (car.get_psi()<=292.5) )
+    {
+      ACS::grid_border_x1=70;
+      ACS::grid_border_x2=80;
+      ACS::grid_border_y1=45;
+      ACS::grid_border_y2=55;
+    }
+    else if( (car.get_psi()>=292.5) && (car.get_psi()<=337.5) )
+    {
+      ACS::grid_border_x1=70;
+      ACS::grid_border_x2=80;
+      ACS::grid_border_y1=20;
+      ACS::grid_border_y2=30;
+    }
+    else
+  {
+      ACS::grid_border_x1=45;
+      ACS::grid_border_x2=55;
+      ACS::grid_border_y1=20;
+      ACS::grid_border_y2=30;
+  }
+
+  ACS::grid_trans_x = ACS::grid_border_x2 - ACS::grid_border_x1;
+  ACS::grid_trans_y = ACS::grid_border_y2 - ACS::grid_border_y1;
+ */
+
+  //adjust the anchor of ACS if it is necessary
+  if (car.get_x()<(ACS::anchor_x+ACS::grid_border_x1))
+  {
+    ACS::anchor_x=ACS::anchor_x-ACS::grid_trans_x;
+  }
+  else if (car.get_x()>(ACS::anchor_x+ACS::grid_border_x2))
+  {
+    ACS::anchor_x=ACS::anchor_x+ACS::grid_trans_x;
+  }
+  if(car.get_y()<(ACS::anchor_y+ACS::grid_border_y1))
+  {
+    ACS::anchor_y=ACS::anchor_y-ACS::grid_trans_y;
+  }
+  else if(car.get_y()>(ACS::anchor_y+ACS::grid_border_y2))
+  {
+    ACS::anchor_y=ACS::anchor_y+ACS::grid_trans_y;
+  }
+
+}
+
+
+ void callback(const  geometry_msgs::PoseStamped::ConstPtr& pose_msg,const pcl::PointCloud<pcl::PointXYZL>::ConstPtr& pcl_msg,uint8_t(*pcl_grid)[GRID_SIZE_X][GRID_SIZE_Y])
+{
+    uint64_t pose_ts_ns=uint64_t(pose_msg->header.stamp.nsec)/1000; //pose time stamp nano second
+    uint64_t pose_ts_s=uint64_t(pose_msg->header.stamp.sec);        //pose time stamp second
+    uint64_t stamp_pose=1000000*pose_ts_s+pose_ts_ns;
+
+    uint64_t stamp_pcl=pcl_msg->header.stamp;
+    uint64_t pcl_ts_ns=stamp_pcl%1000000;
+    uint64_t pcl_ts_s=stamp_pcl/1000000;
+
+    int64_t diff=stamp_pose-stamp_pcl;
+    
+    if(abs(diff)<allowed_diff_ts_ns)//Data is valid
+    {
+        //ROS_INFO("TIME STAMP FROM MSG POSE %llu.%6llu",pose_ts_s,pose_ts_ns);
+        //ROS_INFO("TIME STAMP FROM MSG PCL2 %llu.%6llu",pcl_ts_s,pcl_ts_ns);
+        //ROS_INFO("---------------------------------------------");
+
+        bool skip_the_frame {false};//Flag to check if we should skip the frame
+        //+++++++++++++++++PCL2 PROCESS++++++++++++++++++++++
+        //Check if this frame has information about layers 4-7
+        
+        
+        BOOST_FOREACH(const pcl::PointXYZL& pt, pcl_msg->points)
+        {
+          if(pt.label>=4)
+          {
+            skip_the_frame=true;
+            break;
+          }  
+        }
+        
+        if(skip_the_frame==false)
+        {
+          car.set_x(pose_msg->pose.position.x);
+          car.set_y(pose_msg->pose.position.y);
+          car.set_psi(pose_msg->pose.position.z); 
+          adjust_ACS();
+
+          
+        for(int i=0;i<GRID_SIZE_X;i++)
+          for(int j=0;j<GRID_SIZE_Y;j++)
+          {
+            (*pcl_grid)[i][j]=50;
+          } 
+          
+        BOOST_FOREACH (const pcl::PointXYZL& pt, pcl_msg->points)
+        {
+          if((pt.label==4)||(pt.label==5)||(pt.label==6)) //We acess only layer 2-3
+          //{continue;} 
+          if (pt.z>z_g_max)
+            {
+                z_g_max=pt.z;
+            }
+          else if(pt.z<z_g_min)
+          {
+              z_g_min=pt.z;
+          }
+          if(pt.label==0)
+          {
+              //ROS_INFO("z is %f",pt.z);
+                if((pt.z<2.8)&&((pt.z-0.1)>0))
+                {
+                    geometry_msgs::Point pcl_acs;
+                    double pos_psy=(-car.get_psi()+90)/180*M_PI;
+                    pcl_acs.x=cos(pos_psy)*pt.x-sin(pos_psy)*pt.y;
+                    pcl_acs.y=sin(pos_psy)*pt.x+cos(pos_psy)*pt.y;
+                    pcl_acs.x=pcl_acs.x+car.get_x()-ACS::anchor_x;
+                    pcl_acs.y=pcl_acs.y+car.get_y()-ACS::anchor_y;
+                    if( (pcl_acs.x>=0) && (pcl_acs.x<=double(GRID_SIZE_X*GRID_SPACING)) && (pcl_acs.y>=0) && (pcl_acs.y<=double(GRID_SIZE_Y*GRID_SPACING)) )
+                    {
+                    uint16_t grid_x=uint16_t(floor(pcl_acs.x/GRID_SPACING));
+                    uint16_t grid_y=uint16_t(floor(pcl_acs.y/GRID_SPACING));
+                    (*pcl_grid)[grid_x][grid_y]=10;
+                    } 
+                }
+          }
+          else if(pt.label==1)
+          {
+              //ROS_INFO("z is %f",pt.z);
+                if((pt.z<2.8)&&((pt.z-0.1)>0))
+                {
+                    geometry_msgs::Point pcl_acs;
+                    double pos_psy=(-car.get_psi()+90)/180*M_PI;
+                    pcl_acs.x=cos(pos_psy)*pt.x-sin(pos_psy)*pt.y;
+                    pcl_acs.y=sin(pos_psy)*pt.x+cos(pos_psy)*pt.y;
+                    pcl_acs.x=pcl_acs.x+car.get_x()-ACS::anchor_x;
+                    pcl_acs.y=pcl_acs.y+car.get_y()-ACS::anchor_y;
+                    if( (pcl_acs.x>=0) && (pcl_acs.x<=double(GRID_SIZE_X*GRID_SPACING)) && (pcl_acs.y>=0) && (pcl_acs.y<=double(GRID_SIZE_Y*GRID_SPACING)) )
+                    {
+                    uint16_t grid_x=uint16_t(floor(pcl_acs.x/GRID_SPACING));
+                    uint16_t grid_y=uint16_t(floor(pcl_acs.y/GRID_SPACING));
+                    (*pcl_grid)[grid_x][grid_y]=1;
+                    } 
+                }
+          }
+          else if(pt.label==2)
+          {
+              //ROS_INFO("z is %f",pt.z);
+                if((pt.z<2.8)&&((pt.z-0.1)>0))
+                {
+                    geometry_msgs::Point pcl_acs;
+                    double pos_psy=(-car.get_psi()+90)/180*M_PI;
+                    pcl_acs.x=cos(pos_psy)*pt.x-sin(pos_psy)*pt.y;
+                    pcl_acs.y=sin(pos_psy)*pt.x+cos(pos_psy)*pt.y;
+                    pcl_acs.x=pcl_acs.x+car.get_x()-ACS::anchor_x;
+                    pcl_acs.y=pcl_acs.y+car.get_y()-ACS::anchor_y;
+                    if( (pcl_acs.x>=0) && (pcl_acs.x<=double(GRID_SIZE_X*GRID_SPACING)) && (pcl_acs.y>=0) && (pcl_acs.y<=double(GRID_SIZE_Y*GRID_SPACING)) )
+                    {
+                    uint16_t grid_x=uint16_t(floor(pcl_acs.x/GRID_SPACING));
+                    uint16_t grid_y=uint16_t(floor(pcl_acs.y/GRID_SPACING));
+                    (*pcl_grid)[grid_x][grid_y]=2;
+                    } 
+                }
+          }
+          else if(pt.label==3)
+          {
+              //ROS_INFO("z is %f",pt.z);
+                if((pt.z<2.8)&&((pt.z-0.1)>0))
+                {
+                    geometry_msgs::Point pcl_acs;
+                    double pos_psy=(-car.get_psi()+90)/180*M_PI;
+                    pcl_acs.x=cos(pos_psy)*pt.x-sin(pos_psy)*pt.y;
+                    pcl_acs.y=sin(pos_psy)*pt.x+cos(pos_psy)*pt.y;
+                    pcl_acs.x=pcl_acs.x+car.get_x()-ACS::anchor_x;
+                    pcl_acs.y=pcl_acs.y+car.get_y()-ACS::anchor_y;
+                    if( (pcl_acs.x>=0) && (pcl_acs.x<=double(GRID_SIZE_X*GRID_SPACING)) && (pcl_acs.y>=0) && (pcl_acs.y<=double(GRID_SIZE_Y*GRID_SPACING)) )
+                    {
+                    uint16_t grid_x=uint16_t(floor(pcl_acs.x/GRID_SPACING));
+                    uint16_t grid_y=uint16_t(floor(pcl_acs.y/GRID_SPACING));
+                    (*pcl_grid)[grid_x][grid_y]=3;
+                    } 
+                }
+          } 
+          else if(pt.label==4)
+          {
+              //ROS_INFO("z is %f",pt.z);
+                if((pt.z<2.8)&&((pt.z-0.1)>0))
+                {
+                    geometry_msgs::Point pcl_acs;
+                    double pos_psy=(-car.get_psi()+90)/180*M_PI;
+                    pcl_acs.x=cos(pos_psy)*pt.x-sin(pos_psy)*pt.y;
+                    pcl_acs.y=sin(pos_psy)*pt.x+cos(pos_psy)*pt.y;
+                    pcl_acs.x=pcl_acs.x+car.get_x()-ACS::anchor_x;
+                    pcl_acs.y=pcl_acs.y+car.get_y()-ACS::anchor_y;
+                    if( (pcl_acs.x>=0) && (pcl_acs.x<=double(GRID_SIZE_X*GRID_SPACING)) && (pcl_acs.y>=0) && (pcl_acs.y<=double(GRID_SIZE_Y*GRID_SPACING)) )
+                    {
+                    uint16_t grid_x=uint16_t(floor(pcl_acs.x/GRID_SPACING));
+                    uint16_t grid_y=uint16_t(floor(pcl_acs.y/GRID_SPACING));
+                    (*pcl_grid)[grid_x][grid_y]=4;
+                    } 
+                }
+          }
+          else if(pt.label==5)
+          {
+              //ROS_INFO("z is %f",pt.z);
+                if((pt.z<2.8)&&((pt.z-0.1)>0))
+                {
+                    geometry_msgs::Point pcl_acs;
+                    double pos_psy=(-car.get_psi()+90)/180*M_PI;
+                    pcl_acs.x=cos(pos_psy)*pt.x-sin(pos_psy)*pt.y;
+                    pcl_acs.y=sin(pos_psy)*pt.x+cos(pos_psy)*pt.y;
+                    pcl_acs.x=pcl_acs.x+car.get_x()-ACS::anchor_x;
+                    pcl_acs.y=pcl_acs.y+car.get_y()-ACS::anchor_y;
+                    if( (pcl_acs.x>=0) && (pcl_acs.x<=double(GRID_SIZE_X*GRID_SPACING)) && (pcl_acs.y>=0) && (pcl_acs.y<=double(GRID_SIZE_Y*GRID_SPACING)) )
+                    {
+                    uint16_t grid_x=uint16_t(floor(pcl_acs.x/GRID_SPACING));
+                    uint16_t grid_y=uint16_t(floor(pcl_acs.y/GRID_SPACING));
+                    (*pcl_grid)[grid_x][grid_y]=5;
+                    } 
+                }
+          }
+          else if(pt.label==6)
+          {
+              //ROS_INFO("z is %f",pt.z);
+                if((pt.z<2.8)&&((pt.z-0.1)>0))
+                {
+                    geometry_msgs::Point pcl_acs;
+                    double pos_psy=(-car.get_psi()+90)/180*M_PI;
+                    pcl_acs.x=cos(pos_psy)*pt.x-sin(pos_psy)*pt.y;
+                    pcl_acs.y=sin(pos_psy)*pt.x+cos(pos_psy)*pt.y;
+                    pcl_acs.x=pcl_acs.x+car.get_x()-ACS::anchor_x;
+                    pcl_acs.y=pcl_acs.y+car.get_y()-ACS::anchor_y;
+                    if( (pcl_acs.x>=0) && (pcl_acs.x<=double(GRID_SIZE_X*GRID_SPACING)) && (pcl_acs.y>=0) && (pcl_acs.y<=double(GRID_SIZE_Y*GRID_SPACING)) )
+                    {
+                    uint16_t grid_x=uint16_t(floor(pcl_acs.x/GRID_SPACING));
+                    uint16_t grid_y=uint16_t(floor(pcl_acs.y/GRID_SPACING));
+                    (*pcl_grid)[grid_x][grid_y]=6;
+                    } 
+                }
+          }
+          else if(pt.label==7)
+          {
+              //ROS_INFO("z is %f",pt.z);
+                if((pt.z<2.8)&&((pt.z-0.1)>0))
+                {
+                    geometry_msgs::Point pcl_acs;
+                    double pos_psy=(-car.get_psi()+90)/180*M_PI;
+                    pcl_acs.x=cos(pos_psy)*pt.x-sin(pos_psy)*pt.y;
+                    pcl_acs.y=sin(pos_psy)*pt.x+cos(pos_psy)*pt.y;
+                    pcl_acs.x=pcl_acs.x+car.get_x()-ACS::anchor_x;
+                    pcl_acs.y=pcl_acs.y+car.get_y()-ACS::anchor_y;
+                    if( (pcl_acs.x>=0) && (pcl_acs.x<=double(GRID_SIZE_X*GRID_SPACING)) && (pcl_acs.y>=0) && (pcl_acs.y<=double(GRID_SIZE_Y*GRID_SPACING)) )
+                    {
+                    uint16_t grid_x=uint16_t(floor(pcl_acs.x/GRID_SPACING));
+                    uint16_t grid_y=uint16_t(floor(pcl_acs.y/GRID_SPACING));
+                    (*pcl_grid)[grid_x][grid_y]=7;
+                    } 
+                }
+          } 
+          else if(pt.label==8)
+          {
+              //ROS_INFO("z is %f",pt.z);
+                if((pt.z<2.8)&&((pt.z-0.1)>0))
+                {
+                    geometry_msgs::Point pcl_acs;
+                    double pos_psy=(-car.get_psi()+90)/180*M_PI;
+                    pcl_acs.x=cos(pos_psy)*pt.x-sin(pos_psy)*pt.y;
+                    pcl_acs.y=sin(pos_psy)*pt.x+cos(pos_psy)*pt.y;
+                    pcl_acs.x=pcl_acs.x+car.get_x()-ACS::anchor_x;
+                    pcl_acs.y=pcl_acs.y+car.get_y()-ACS::anchor_y;
+                    if( (pcl_acs.x>=0) && (pcl_acs.x<=double(GRID_SIZE_X*GRID_SPACING)) && (pcl_acs.y>=0) && (pcl_acs.y<=double(GRID_SIZE_Y*GRID_SPACING)) )
+                    {
+                    uint16_t grid_x=uint16_t(floor(pcl_acs.x/GRID_SPACING));
+                    uint16_t grid_y=uint16_t(floor(pcl_acs.y/GRID_SPACING));
+                    (*pcl_grid)[grid_x][grid_y]=8;
+                    } 
+                }
+          }
+
+          }
+          
+          if_get_new_data=true;
+        }
+
+        
+
+       
+      }
+
+    
+     
+}
+
+
+//Generate the discretized car cluster relative to ACS 
+void generate_car_cluster(double ego_x,double ego_y,double ego_yaw,double anchor_x,double ancor_y,std::vector<geometry_msgs::Point> &car_grid)
+{ 
+  double pos_psy=(-ego_yaw+90)/180*M_PI;  //change to rad and "nordweisend Koordinat"
+  //This part is to convert the information about car to the grid
+  double fl_ego_x=EGO_AXLE2FRONT;
+  double rl_ego_x=-EGO_DIM_X+EGO_AXLE2FRONT;
+  double rl_ego_y= EGO_DIM_Y/2;
+  double rr_ego_y= -EGO_DIM_Y/2;
+
+  std::vector<double> cluster_x_fill=linspace(rl_ego_x,fl_ego_x,30);
+  std::vector<double> cluster_y_fill=linspace(rr_ego_y,rl_ego_y,30); 
+
+
+  std::vector<double> cluster_x_rot;
+  std::vector<double> cluster_y_rot;
+
+  for(int i=0;i<cluster_x_fill.size();i++)
+  {
+    for(int j=0;j<cluster_y_fill.size();j++)
+    {
+      cluster_x_rot.push_back(cos(pos_psy)*cluster_x_fill[i]-sin(pos_psy)*cluster_y_fill[j]);
+	    cluster_y_rot.push_back(sin(pos_psy)*cluster_x_fill[i]+cos(pos_psy)*cluster_y_fill[j]);
+    }
+	  
+  }
+
+ 
+  std::vector<double> cluster_x;
+  std::vector<double> cluster_y;
+  double offset2anchor_x=ego_x-anchor_x;//Abstand zwischen ACS und VCS berechnen
+  double offset2anchor_y=ego_y-ancor_y;
+  for(int i=0; i<cluster_x_rot.size();i++)
+  {
+    cluster_x.push_back(cluster_x_rot[i]+offset2anchor_x);
+  }
+  for(int i=0; i<cluster_y_rot.size();i++)
+  {
+    cluster_y.push_back(cluster_y_rot[i]+offset2anchor_y);
+  }
+
+  //Convert point clound to grid fields
+  std::vector<double> cluster_x_field;
+  std::vector<double> cluster_y_field;
+  for(int i=0; i<cluster_x.size();i++)
+  {
+    cluster_x_field.push_back(uint16_t(floor(cluster_x[i]/GRID_SPACING)));
+  }
+  for(int i=0; i<cluster_y.size();i++)
+  {
+    cluster_y_field.push_back(uint16_t(floor(cluster_y[i]/GRID_SPACING)));
+  }
+
+  geometry_msgs::Point single_point;
+
+  for(int i=0; i<cluster_x_field.size();i++)
+  {
+    
+    single_point.x=cluster_x_field[i];
+    single_point.y=cluster_y_field[i];
+    car_grid.push_back(single_point);
+  }
+
+}
+
+
+std::vector<double> linspace(double a,double b, int n)
+{
+  std::vector<double> array;
+  double step=(b-a)/(n-1);
+  while(a<=b)
+    {
+      array.push_back(a);
+      a+=step;
+    }
+  return array;
+}
+
+
+
+//visualize Cells
+void visualize_girdcells(const std::vector<geometry_msgs::Point>& cells,const std::string& frame_id,float grid_cell_width,float grid_cell_height,
+                        ros::Publisher pub,double offset_x,double offset_y)
+{ 
+  nav_msgs::GridCells vis_grid;
+  vis_grid.header.stamp=ros::Time::now();
+  vis_grid.header.frame_id=frame_id;
+  vis_grid.cell_width=grid_cell_width;
+  vis_grid.cell_height=grid_cell_height;
+
+
+  for(int i=0;i<cells.size();i++)
+  {
+    vis_grid.cells.push_back(cells[i]);
+  }
+
+  if(offset_x!=0)
+  {
+    for(int i=0;i<vis_grid.cells.size();i++)
+    {
+      vis_grid.cells[i].x-=offset_x;
+    }
+  }
+  if(offset_y!=0)
+  {
+    for(int i=0;i<vis_grid.cells.size();i++)
+    {
+      vis_grid.cells[i].y-=offset_y;
+    }
+  }
+
+  pub.publish(vis_grid);
+}
+
+
+

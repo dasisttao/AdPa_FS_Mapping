@@ -24,7 +24,7 @@
 
 
 
-
+bool flag_msg_valid {false};
 
 
  //++++++++++++++++++++++++++++++++++++++++++++++++CONFIG/PARAMETER++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -85,7 +85,7 @@ int main(int argc, char **argv)
 {
     ros::init(argc,argv,"ad_pa_fs_mapping");
     ros::NodeHandle nh;
-    ros::Rate loop_rate(12.5);
+    ros::Rate loop_rate(25);
 
     ABC acs;
     ABC* ptracs;
@@ -110,11 +110,11 @@ int main(int argc, char **argv)
     
     
     ROS_INFO("l_max: %f",l[probability::max]);
-    ROS_INFO("l_min:%f",l[probability::min]);
-    ROS_INFO("l_unknown:%f",l[probability::unknown]);
+    ROS_INFO("l_min: %f",l[probability::min]);
+    ROS_INFO("l_unknown: %f",l[probability::unknown]);
     
-    ROS_INFO("l_fill:%f",l[probability::fill]);
-    ROS_INFO("l_clear:%f",l[probability::clear]);
+    ROS_INFO("l_fill: %f",l[probability::fill]);
+    ROS_INFO("l_clear: %f",l[probability::clear]);
 
 
 
@@ -166,13 +166,8 @@ int main(int argc, char **argv)
     ROS_INFO("Car position ( %f, %f ) ",car.get_x(),car.get_y());
     ROS_INFO("Anchor init_postion ( %f, %f )",acs.get_current_anchor_x(),acs.get_current_anchor_y());
     ROS_INFO("difference ( %f, %f ) ",car.get_x()-acs.get_current_anchor_x(),car.get_y()-acs.get_current_anchor_y());
-
-    geometry_msgs::Pose og_origin;
-    og_origin.position.x=acs.get_current_anchor_x()-VISUAL_OFFSET_X;
-    og_origin.position.y=acs.get_current_anchor_y()-VISUAL_OFFSET_Y;
-    og_origin.position.z=0.0; 
-    oG2D oG2D(0.1,GRID_SIZE_X,GRID_SIZE_Y,og_origin);
-
+    
+    
     while(ros::ok())
     {
         ros::spinOnce();//call all the callbacks waiting to be called at that point in time.
@@ -183,8 +178,7 @@ int main(int argc, char **argv)
             og_origin.position.x=acs.get_current_anchor_x()-VISUAL_OFFSET_X;
             og_origin.position.y=acs.get_current_anchor_y()-VISUAL_OFFSET_Y;
             og_origin.position.z=0.0;  
-            oG2D.setOrigin(og_origin);
-
+            oG2D oG2D(0.1,GRID_SIZE_X,GRID_SIZE_Y,og_origin);
             geometry_msgs::Point cluster_point; //One point to be used as argument for all vectors push back
 
             //anchor++++
@@ -217,15 +211,19 @@ int main(int argc, char **argv)
             }
 
         
+            
+            
+            
 
-            create_freespace(pcl_grid_pointer,current_grid_pointer,l,acs);
-
+            
             update_grid_when_anchor_moved(history_grid_pointer,l[probability::unknown],acs);
+            create_freespace(pcl_grid_pointer,current_grid_pointer,l,acs);
             binary_bayes(current_grid_pointer,history_grid_pointer,l[probability::max],l[probability::min],l[probability::unknown]);
+            
 
             std::vector<int8_t> probability_vector;
 
-        
+            
             for(auto j=0;j<GRID_SIZE_Y;j++)
                 for(auto i=0;i<GRID_SIZE_X;i++)
                 {
@@ -242,9 +240,9 @@ int main(int argc, char **argv)
                 }
 
         
-
+            
             oG2D.visualization(probability_vector,oG_pub,"map");
-
+            
 
 
             visualize_girdcells(anchor_cluster,"map",float(1),float(1),anchor_pub,VISUAL_OFFSET_X,VISUAL_OFFSET_Y);
@@ -257,9 +255,6 @@ int main(int argc, char **argv)
                     current_grid[i][j]=l[probability::unknown];
                 }
 
-
-            //ACS::history_anchor_x=ACS::anchor_x;
-            //ACS::history_anchor_y=ACS::anchor_y;
             acs.set_history_anchor_x(acs.get_current_anchor_x());
             acs.set_history_anchor_y(acs.get_current_anchor_y());
              
@@ -270,12 +265,11 @@ int main(int argc, char **argv)
         
 
     }
-
+     
 
 
 
 }
-
 
 void update_grid_when_anchor_moved(float (*grid)[GRID_SIZE_X][GRID_SIZE_Y],float new_are_fullfill,const ABC& acs)
 {
@@ -283,16 +277,90 @@ void update_grid_when_anchor_moved(float (*grid)[GRID_SIZE_X][GRID_SIZE_Y],float
     {
         return;
     }
+    uint16_t grid_trans_x=std::abs((acs.get_current_anchor_x()-acs.get_history_anchor_x())/GRID_SPACING);
+    uint16_t grid_trans_y=std::abs((acs.get_current_anchor_y()-acs.get_history_anchor_y())/GRID_SPACING);
+    ROS_INFO("grird_trans_x %d",grid_trans_x);
+    ROS_INFO("grird_trans_y %d",grid_trans_y);
+          
     if(acs.get_current_anchor_x()<acs.get_history_anchor_x())
     {
         ROS_INFO("anchor moved left");
-        for(auto i=acs.get_grid_trans_x_cell();i>=0;i--)
-            for(auto j=0;j<GRID_SIZE_Y;j++)
+        for(int16_t i=GRID_SIZE_X-1;i>=grid_trans_x;i--)
+            for(int16_t j=0;j<GRID_SIZE_Y;j++)
+            {
+                (*grid)[i][j]=(*grid)[i-grid_trans_x][j];
+            }
+        for(int16_t i=grid_trans_x-1;i>=0;i--)
+            for(int16_t j=0;j<GRID_SIZE_Y;j++)
             {
                 (*grid)[i][j]=new_are_fullfill;
             }
-        for(auto i=GRID_SIZE_X-1;i>acs.get_grid_trans_x_cell();i--)
-            for(auto j=0;j<GRID_SIZE_Y;j++)
+    }
+    else if(acs.get_current_anchor_x()>acs.get_history_anchor_x())
+    {
+        ROS_INFO("anchor moved right");
+        for(int16_t i=0;i<=GRID_SIZE_X-1-grid_trans_x;i++)
+            for(int16_t j=0;j<GRID_SIZE_Y;j++)
+            {
+                (*grid)[i][j]=(*grid)[i+grid_trans_x][j];
+            }
+        for(int16_t i=GRID_SIZE_X-grid_trans_x;i<=GRID_SIZE_X-1;i++)
+            for(int16_t j=0;j<GRID_SIZE_Y;j++)
+            {
+                (*grid)[i][j]=new_are_fullfill;
+            }
+    }
+    if(acs.get_current_anchor_y()<acs.get_history_anchor_y())
+    {
+        ROS_INFO("anchor moved down");
+        
+        for(int16_t i=0;i<=GRID_SIZE_X-1;i++)
+            for(int16_t j=GRID_SIZE_Y-1;j>=grid_trans_y;j--)
+            {
+                (*grid)[i][j]=(*grid)[i][j-grid_trans_y];
+            }
+        for(int16_t i=0;i<=GRID_SIZE_X-1;i++)
+            for(int16_t j=grid_trans_y-1;j>=0;j--)
+            {
+                (*grid)[i][j]=new_are_fullfill;
+            }
+    }
+    else if(acs.get_current_anchor_y()>acs.get_history_anchor_y())
+    {
+        ROS_INFO("anchor moved up");
+        for(int16_t i=0;i<GRID_SIZE_X;i++)
+            for(int16_t j=0;j<=GRID_SIZE_Y-1-grid_trans_y;j++)
+            {
+                (*grid)[i][j]=(*grid)[i][j+grid_trans_y];
+            }
+        for(int16_t i=0;i<GRID_SIZE_X;i++)
+            for(int16_t j=GRID_SIZE_Y-grid_trans_y;j<=GRID_SIZE_Y-1;j++)
+            {
+                (*grid)[i][j]=new_are_fullfill;
+            }
+    }
+}
+/*
+void update_grid_when_anchor_moved(float (*grid)[GRID_SIZE_X][GRID_SIZE_Y],float new_are_fullfill,const ABC& acs)
+{
+    if((acs.get_current_anchor_x()==acs.get_history_anchor_x())&&(acs.get_current_anchor_y()==acs.get_history_anchor_y()))
+    {
+        return;
+    }
+    uint16_t grid_trans_x=std::abs((acs.get_current_anchor_x()-acs.get_history_anchor_x())/GRID_SPACING);
+    uint16_t grid_trans_y=std::abs((acs.get_current_anchor_y()-acs.get_history_anchor_y())/GRID_SPACING);
+    ROS_INFO("grird_trans_x %d",grid_trans_x);
+    ROS_INFO("grird_trans_y %d",grid_trans_y);
+    if(acs.get_current_anchor_x()<acs.get_history_anchor_x())
+    {
+        ROS_INFO("anchor moved left");
+        for(int16_t i=acs.get_grid_trans_x_cell()-1;i>=0;i--)
+            for(int16_t j=0;j<GRID_SIZE_Y;j++)
+            {
+                (*grid)[i][j]=new_are_fullfill;
+            }
+        for(int16_t i=GRID_SIZE_X-1;i>=acs.get_grid_trans_x_cell();i--)
+            for(int16_t j=0;j<GRID_SIZE_Y;j++)
             {
                 (*grid)[i][j]=(*grid)[i-acs.get_grid_trans_x_cell()][j];
             }
@@ -300,13 +368,13 @@ void update_grid_when_anchor_moved(float (*grid)[GRID_SIZE_X][GRID_SIZE_Y],float
     else if(acs.get_current_anchor_x()>acs.get_history_anchor_x())
     {
         ROS_INFO("anchor moved right");
-        for(auto i=GRID_SIZE_X-1-acs.get_grid_trans_x_cell();i<=GRID_SIZE_X-1;i++)
-            for(auto j=0;j<GRID_SIZE_Y;j++)
+        for(int16_t i=GRID_SIZE_X-acs.get_grid_trans_x_cell();i<=GRID_SIZE_X-1;i++)
+            for(int16_t j=0;j<GRID_SIZE_Y;j++)
             {
                 (*grid)[i][j]=new_are_fullfill;
             }
-        for(auto i=0;i<GRID_SIZE_X-1-acs.get_grid_trans_x_cell();i++)
-            for(auto j=0;j<GRID_SIZE_Y;j++)
+        for(int16_t i=0;i<=GRID_SIZE_X-1-acs.get_grid_trans_x_cell();i++)
+            for(int16_t j=0;j<GRID_SIZE_Y;j++)
             {
                 (*grid)[i][j]=(*grid)[i+acs.get_grid_trans_x_cell()][j];
             }
@@ -314,13 +382,13 @@ void update_grid_when_anchor_moved(float (*grid)[GRID_SIZE_X][GRID_SIZE_Y],float
     if(acs.get_current_anchor_y()<acs.get_history_anchor_y())
     {
         ROS_INFO("anchor moved down");
-        for(auto i=0;i<GRID_SIZE_X;i++)
-            for(auto j=acs.get_grid_trans_y_cell();j>=0;j--)
+        for(int16_t i=0;i<GRID_SIZE_X;i++)
+            for(int16_t j=acs.get_grid_trans_y_cell()-1;j>=0;j--)
             {
                 (*grid)[i][j]=new_are_fullfill;
             }
-        for(auto i=0;i<GRID_SIZE_X;i++)
-            for(auto j=GRID_SIZE_Y-1;j>acs.get_grid_trans_y_cell();j--)
+        for(int16_t i=0;i<GRID_SIZE_X;i++)
+            for(int16_t j=GRID_SIZE_Y-1;j>=acs.get_grid_trans_y_cell();j--)
             {
                 (*grid)[i][j]=(*grid)[i][j-acs.get_grid_trans_y_cell()];
             }
@@ -328,20 +396,20 @@ void update_grid_when_anchor_moved(float (*grid)[GRID_SIZE_X][GRID_SIZE_Y],float
     else if(acs.get_current_anchor_y()>acs.get_history_anchor_y())
     {
         ROS_INFO("anchor moved up");
-        for(auto i=0;i<GRID_SIZE_X;i++)
-            for(auto j=GRID_SIZE_Y-1-acs.get_grid_trans_y_cell();j<=GRID_SIZE_Y-1;j++)
+        for(int16_t i=0;i<GRID_SIZE_X;i++)
+            for(int16_t j=GRID_SIZE_Y-acs.get_grid_trans_y_cell();j<=GRID_SIZE_Y-1;j++)
             {
                 (*grid)[i][j]=new_are_fullfill;
             }
 
-        for(auto i=0;i<GRID_SIZE_X;i++)
-            for(auto j=0;j<GRID_SIZE_Y-1-acs.get_grid_trans_y_cell();j++)
+        for(int16_t i=0;i<GRID_SIZE_X;i++)
+            for(int16_t j=0;j<=GRID_SIZE_Y-1-acs.get_grid_trans_y_cell();j++)
             {
                 (*grid)[i][j]=(*grid)[i][j+acs.get_grid_trans_y_cell()];
             }
     }
 }
-
+ */
 
 
 
@@ -350,10 +418,10 @@ void anchor_init(const Vehicle& car,ABC& acs)
     //Make the anchor near the car so that it could quickly determine its initilazied position and make sure it is 10*Z number
     acs.set_history_anchor_x(double(static_cast<int64_t>(car.get_x())/10)*10.0);
     acs.set_history_anchor_y(double(static_cast<int64_t>(car.get_y())/10)*10.0);
-    while(  (car.get_x()< acs.get_current_anchor_x()+acs.get_borderoFcar_x1_m())||
-            (car.get_x()>acs.get_current_anchor_x()+acs.get_borderoFcar_x2_m())||
-            (car.get_y()<acs.get_current_anchor_y()+acs.get_borderoFcar_y1_m())||
-            (car.get_y()>acs.get_current_anchor_y()+acs.get_borderoFcar_y2_m())
+    while(  (car.get_x()<= acs.get_current_anchor_x()+acs.get_borderoFcar_x1_m())||
+            (car.get_x()>=acs.get_current_anchor_x()+acs.get_borderoFcar_x2_m())||
+            (car.get_y()<=acs.get_current_anchor_y()+acs.get_borderoFcar_y1_m())||
+            (car.get_y()>=acs.get_current_anchor_y()+acs.get_borderoFcar_y2_m())
         )
     {
         adjust_ACS(acs);
@@ -438,11 +506,13 @@ void adjust_ACS(ABC* acs)
         }
         if(skip_the_frame==false)
         {
+            
             car.set_x(pose_msg->pose.position.x);
             car.set_y(pose_msg->pose.position.y);
             car.set_psi(pose_msg->pose.position.z); 
 
             adjust_ACS(ptracs);
+
             for(int i=0;i<GRID_SIZE_X;i++)
                 for(int j=0;j<GRID_SIZE_Y;j++)
                 {
@@ -450,28 +520,68 @@ void adjust_ACS(ABC* acs)
                 } 
             BOOST_FOREACH (const pcl::PointXYZL& pt, pcl_msg->points)
             {
-                if((pt.label!=2)&&(pt.label!=3)&&(pt.label!=1))
+                if(pt.label>=4)
+            {ROS_INFO("STILL LAYER 4-7");}
+                if((pt.label!=2)&&(pt.label!=3)&&(pt.label!=1)&&(pt.label!=0))
                 {
                     continue;
                 }
-                if((pt.z<2.8)&&((pt.z-0.1)>0))
+                if(pt.label==0)
                 {
-                    geometry_msgs::Point pcl_acs;
-                    double pos_psy=(-car.get_psi()+90)/180*M_PI;
-                    pcl_acs.x=cos(pos_psy)*pt.x-sin(pos_psy)*pt.y;
-                    pcl_acs.y=sin(pos_psy)*pt.x+cos(pos_psy)*pt.y;
-                    pcl_acs.x=pcl_acs.x+car.get_x()-ptracs->get_current_anchor_x();
-                    pcl_acs.y=pcl_acs.y+car.get_y()-ptracs->get_current_anchor_y();
-                    if( (pcl_acs.x>=0) && (pcl_acs.x<=double(GRID_SIZE_X*GRID_SPACING)) && (pcl_acs.y>=0) && (pcl_acs.y<=double(GRID_SIZE_Y*GRID_SPACING)) )
+                    if(pt.x>0)
                     {
-                        uint16_t grid_x=uint16_t(floor(pcl_acs.x/GRID_SPACING));
-                        uint16_t grid_y=uint16_t(floor(pcl_acs.y/GRID_SPACING));
-                        (*pcl_grid)[grid_x][grid_y]=discrete_pcl::set;
-                    } 
+                        if((pt.z<2.8)&&((pt.z-0.1)>0))
+                        {
+                            geometry_msgs::Point pcl_acs;
+                            double pos_psy=(-car.get_psi()+90)/180*M_PI;
+                            pcl_acs.x=cos(pos_psy)*pt.x-sin(pos_psy)*pt.y;
+                            pcl_acs.y=sin(pos_psy)*pt.x+cos(pos_psy)*pt.y;
+                            pcl_acs.x=pcl_acs.x+car.get_x()-ptracs->get_current_anchor_x();
+                            pcl_acs.y=pcl_acs.y+car.get_y()-ptracs->get_current_anchor_y();
+                            if( (pcl_acs.x>=0) && (pcl_acs.x<=double(GRID_SIZE_X*GRID_SPACING)) && (pcl_acs.y>=0) && (pcl_acs.y<=double(GRID_SIZE_Y*GRID_SPACING)) )
+                            {
+                                uint16_t grid_x=uint16_t(floor(pcl_acs.x/GRID_SPACING));
+                                uint16_t grid_y=uint16_t(floor(pcl_acs.y/GRID_SPACING));
+                                (*pcl_grid)[grid_x][grid_y]=discrete_pcl::set;
+                            } 
+                        }
+                    }
+                     
+                }
+                else
+                {
+                    if((pt.z<2.8)&&((pt.z-0.1)>0))
+                    {
+                        geometry_msgs::Point pcl_acs;
+                        double pos_psy=(-car.get_psi()+90)/180*M_PI;
+                        pcl_acs.x=cos(pos_psy)*pt.x-sin(pos_psy)*pt.y;
+                        pcl_acs.y=sin(pos_psy)*pt.x+cos(pos_psy)*pt.y;
+                        pcl_acs.x=pcl_acs.x+car.get_x()-ptracs->get_current_anchor_x();
+                        pcl_acs.y=pcl_acs.y+car.get_y()-ptracs->get_current_anchor_y();
+                        if( (pcl_acs.x>=0) && (pcl_acs.x<=double(GRID_SIZE_X*GRID_SPACING)) && (pcl_acs.y>=0) && (pcl_acs.y<=double(GRID_SIZE_Y*GRID_SPACING)) )
+                        {
+                            uint16_t grid_x=uint16_t(floor(pcl_acs.x/GRID_SPACING));
+                            uint16_t grid_y=uint16_t(floor(pcl_acs.y/GRID_SPACING));
+                            (*pcl_grid)[grid_x][grid_y]=discrete_pcl::set;
+                            flag_msg_valid=true;
+                        } 
+                    }
                 }
                 
+                
             }
-            if_get_new_data=true;
+             
+            if(flag_msg_valid==false)
+            {
+                ROS_INFO("MSG NOT VALID!");
+            }
+            else if(flag_msg_valid==true)
+            {
+                flag_msg_valid=false;
+                if_get_new_data=true;
+            }
+
+            
         }
         
           
@@ -489,16 +599,469 @@ void adjust_ACS(ABC* acs)
 
 
 
+void create_freespace(uint8_t (*pcl_grid)[GRID_SIZE_X][GRID_SIZE_Y],float (*current_grid)[GRID_SIZE_X][GRID_SIZE_Y],const std::vector<float>& l,const ABC& acs)
+{
+    double offset_x=car.get_x()-acs.get_current_anchor_x();
+    double offset_y=car.get_y()-acs.get_current_anchor_y();
+
+    for(int laser_num=0;laser_num<laser_x.size();laser_num++)
+    {
+        double pos_psy=(-car.get_psi()+90)/180*M_PI;
+        double laser_abs_x=cos(pos_psy)*laser_x[laser_num]-sin(pos_psy)*laser_y[laser_num]+offset_x;
+        double laser_abs_y=sin(pos_psy)*laser_x[laser_num]+cos(pos_psy)*laser_y[laser_num]+offset_y;
+
+        double laser_abs_yaw=std::fmod(pos_psy+laser_yaw[laser_num],2*M_PI);
+
+        int32_t xstart=floor(laser_abs_x/GRID_SPACING);
+        int32_t ystart=floor(laser_abs_y/GRID_SPACING);
+
+        for(int num=0;num<(radiation_num/radiation_num_divder);num++)
+        {
+            int32_t beam_x=floor(cos(angle_resolution*num+laser_abs_yaw)*DMAX/GRID_SPACING);
+            int32_t beam_y=floor(sin(angle_resolution*num+laser_abs_yaw)*DMAX/GRID_SPACING);
+
+            int32_t xend=xstart+beam_x;
+            int32_t yend=ystart+beam_y;
+            
+            if(xend>(GRID_SIZE_X-1))
+            {
+                beam_x=GRID_SIZE_X-1-xstart;
+                double dmaxtemp=std::abs(beam_x*GRID_SPACING/(cos(angle_resolution*num+laser_abs_yaw)));
+
+                beam_y=floor(sin(angle_resolution*num+laser_abs_yaw)*dmaxtemp/GRID_SPACING);
+
+                xend=GRID_SIZE_X-1;
+                yend=ystart+beam_y;
+                
+            }
+            else if(xend<0)
+            {
+                beam_x=xstart-0;
+                double dmaxtemp=std::abs(beam_x*GRID_SPACING/(cos(angle_resolution*num+laser_abs_yaw)));
+
+                beam_y=floor(sin(angle_resolution*num+laser_abs_yaw)*dmaxtemp/GRID_SPACING);
+
+                xend=0;
+                yend=ystart+beam_y;
+            }
+
+            if(yend>(GRID_SIZE_Y-1))
+            {
+                beam_y=GRID_SIZE_Y-1-ystart;
+                double dmaxtemp=std::abs(beam_y*GRID_SPACING/(sin(angle_resolution*num+laser_abs_yaw)));
+                
+                beam_x=floor(cos(angle_resolution*num+laser_abs_yaw)*dmaxtemp/GRID_SPACING);
+
+                yend=GRID_SIZE_X-1;
+                xend=xstart+beam_x;
+            }
+            else if(yend<0)
+            {
+                beam_y=ystart-0;
+                double dmaxtemp=std::abs(beam_y*GRID_SPACING/(sin(angle_resolution*num+laser_abs_yaw)));
+
+                beam_y=floor(cos(angle_resolution*num+laser_abs_yaw)*dmaxtemp/GRID_SPACING);
+
+                yend=0;
+                xend=xstart+beam_x;
+            }
+        
+            int32_t dx=round(xend-xstart);
+            int32_t dy=round(yend-ystart);
+
+    
+            int8_t incx=sign(dx);
+            int8_t incy=sign(dy);
+            
+            int pdx;
+            int pdy;
+            int ddx;
+            int ddy;
+            int32_t deltaslowdirection=0;
+            int32_t deltafastdirection=0;
+            if(dx<0)
+                {dx=-dx;}
+            if(dy<0)
+                {dy=-dy;}
+
+            if(dx>dy)
+            {
+                pdx=incx;
+                pdy=0;
+                ddx=incx;
+                ddy=incy;
+
+                deltaslowdirection=dy;
+                deltafastdirection=dx;
+            }
+            else if(dx<=dy)
+            {
+                pdx=0;
+                pdy=incy;
+                ddx=incx;
+                ddy=incy;
+
+                deltaslowdirection=dx;
+                deltafastdirection=dy;
+            }
+        
+        
+            int32_t x=xstart;
+            int32_t y=ystart;
+            int32_t err=deltafastdirection/2;
+
+
+            bool if_obstacle {false};
+
+            
+            for(int32_t j=0;j<(deltafastdirection);j++)//Check if i have the obstabcle
+            {    
+                err=err-deltaslowdirection;
+                if(err<0)
+                {
+                    err=err+deltafastdirection;
+                    x=x+ddx;
+                    y=y+ddy;
+                }
+                else
+                {
+                    x=x+pdx;
+                    y=y+pdy;
+                }
+
+                double d=sqrt( pow((x-xstart)*GRID_SPACING,2.0)+ pow((y-ystart)*GRID_SPACING,2.0) );
+                
+                if((*pcl_grid)[uint16_t(x)][uint16_t(y)]==discrete_pcl::set)
+                {
+                
+                    if((d<DMAX)&&(d>=DMIN))
+                    {
+                        (*current_grid)[uint16_t(x)][uint16_t(y)]=l[probability::fill];
+                        if_obstacle=true;
+                        break;
+                    }
+
+                }
+                
+            
+            }
+
+            if(if_obstacle==true)
+            {
+                x=xstart;
+                y=ystart;
+                err=deltafastdirection/2;
+                for(int32_t j=0;j<(deltafastdirection);j++)//Check if i have the obstabcle
+                {    
+                    err=err-deltaslowdirection;
+                    if(err<0)
+                    {
+                        err=err+deltafastdirection;
+                        x=x+ddx;
+                        y=y+ddy;
+                    }
+                    else
+                    {
+                        x=x+pdx;
+                        y=y+pdy;
+                    }
+
+                    if((*current_grid)[uint16_t(x)][uint16_t(y)]==l[probability::fill])
+                    {
+                        break;
+                    }
+                    else if((*current_grid)[uint16_t(x)][uint16_t(y)]==l[probability::unknown])
+                    {
+                        double d=sqrt( pow((x-xstart)*GRID_SPACING,2.0)+ pow((y-ystart)*GRID_SPACING,2.0) );
+                        if (d<DMIN)
+                        {
+                            (*current_grid)[uint16_t(x)][uint16_t(y)]=l[probability::clear];
+                        }
+                        else if((d<DMAX)&&(d>=DMIN))
+                        {
+                            (*current_grid)[uint16_t(x)][uint16_t(y)]=l[probability::clear];
+                            //(*current_grid)[uint16_t(x)][uint16_t(y)]=20+0.5*(d-DMIN);
+                        }
+                    }
+                    else if((*current_grid)[uint16_t(x)][uint16_t(y)]!=l[probability::unknown])
+                    {continue;}
+                    
+                
+                }
+            }
+
+            if(if_obstacle==false)
+            {
+                x=xstart;
+                y=ystart;
+                err=deltafastdirection/2;
+                for(int32_t j=0;j<(deltafastdirection);j++)//Check if i have the obstabcle
+                {    
+                    err=err-deltaslowdirection;
+                    if(err<0)
+                    {
+                        err=err+deltafastdirection;
+                        x=x+ddx;
+                        y=y+ddy;
+                    }
+                    else
+                    {
+                        x=x+pdx;
+                        y=y+pdy;
+                    }
+                    double d=sqrt( pow((x-xstart)*GRID_SPACING,2.0)+ pow((y-ystart)*GRID_SPACING,2.0) );
+                    if(d<DMAX)
+                        {
+                            (*current_grid)[uint16_t(x)][uint16_t(y)]=l[probability::clear];
+                        }
+                    
+                    
+
+                    
+                
+                }
+            }
+            
+        }
+    }
+
+} 
+
+
+
+/*
+void create_freespace(uint8_t (*pcl_grid)[GRID_SIZE_X][GRID_SIZE_Y],float (*current_grid)[GRID_SIZE_X][GRID_SIZE_Y],const std::vector<float>& l,const ABC& acs)
+{
+    double offset_x=car.get_x()-acs.get_current_anchor_x();
+    double offset_y=car.get_y()-acs.get_current_anchor_y();
+
+    for(int laser_num=0;laser_num<laser_x.size();laser_num++)
+    {
+        double pos_psy=(-car.get_psi()+90)/180*M_PI;
+        double laser_abs_x=cos(pos_psy)*laser_x[laser_num]-sin(pos_psy)*laser_y[laser_num]+offset_x;
+        double laser_abs_y=sin(pos_psy)*laser_x[laser_num]+cos(pos_psy)*laser_y[laser_num]+offset_y;
+
+        double laser_abs_yaw=std::fmod(pos_psy+laser_yaw[laser_num],2*M_PI);
+
+        int32_t xstart=floor(laser_abs_x/GRID_SPACING);
+        int32_t ystart=floor(laser_abs_y/GRID_SPACING);
+
+        for(int num=0;num<(radiation_num/radiation_num_divder);num++)
+        {
+            int32_t beam_x=floor(cos(angle_resolution*num+laser_abs_yaw)*DMAX/GRID_SPACING);
+            int32_t beam_y=floor(sin(angle_resolution*num+laser_abs_yaw)*DMAX/GRID_SPACING);
+
+            int32_t xend=xstart+beam_x;
+            int32_t yend=ystart+beam_y;
+            
+            if(xend>(GRID_SIZE_X-1))
+            {
+                beam_x=GRID_SIZE_X-1-xstart;
+                double dmaxtemp=std::abs(beam_x*GRID_SPACING/(cos(angle_resolution*num+laser_abs_yaw)));
+
+                beam_y=floor(sin(angle_resolution*num+laser_abs_yaw)*dmaxtemp/GRID_SPACING);
+
+                xend=GRID_SIZE_X-1;
+                yend=ystart+beam_y;
+                
+            }
+            else if(xend<0)
+            {
+                beam_x=xstart-0;
+                double dmaxtemp=std::abs(beam_x*GRID_SPACING/(cos(angle_resolution*num+laser_abs_yaw)));
+
+                beam_y=floor(sin(angle_resolution*num+laser_abs_yaw)*dmaxtemp/GRID_SPACING);
+
+                xend=0;
+                yend=ystart+beam_y;
+            }
+
+            if(yend>(GRID_SIZE_Y-1))
+            {
+                beam_y=GRID_SIZE_Y-1-ystart;
+                double dmaxtemp=std::abs(beam_y*GRID_SPACING/(sin(angle_resolution*num+laser_abs_yaw)));
+                
+                beam_x=floor(cos(angle_resolution*num+laser_abs_yaw)*dmaxtemp/GRID_SPACING);
+
+                yend=GRID_SIZE_X-1;
+                xend=xstart+beam_x;
+            }
+            else if(yend<0)
+            {
+                beam_y=ystart-0;
+                double dmaxtemp=std::abs(beam_y*GRID_SPACING/(sin(angle_resolution*num+laser_abs_yaw)));
+
+                beam_y=floor(cos(angle_resolution*num+laser_abs_yaw)*dmaxtemp/GRID_SPACING);
+
+                yend=0;
+                xend=xstart+beam_x;
+            }
+        
+            int32_t dx=round(xend-xstart);
+            int32_t dy=round(yend-ystart);
+
+    
+            int8_t incx=sign(dx);
+            int8_t incy=sign(dy);
+            
+            int pdx;
+            int pdy;
+            int ddx;
+            int ddy;
+            int32_t deltaslowdirection=0;
+            int32_t deltafastdirection=0;
+            if(dx<0)
+                {dx=-dx;}
+            if(dy<0)
+                {dy=-dy;}
+
+            if(dx>dy)
+            {
+                pdx=incx;
+                pdy=0;
+                ddx=incx;
+                ddy=incy;
+
+                deltaslowdirection=dy;
+                deltafastdirection=dx;
+            }
+            else if(dx<=dy)
+            {
+                pdx=0;
+                pdy=incy;
+                ddx=incx;
+                ddy=incy;
+
+                deltaslowdirection=dx;
+                deltafastdirection=dy;
+            }
+        
+        
+            int32_t x=xstart;
+            int32_t y=ystart;
+            int32_t err=deltafastdirection/2;
+
+
+            bool if_obstacle {false};
+
+            
+            for(int32_t j=0;j<(deltafastdirection);j++)//Check if i have the obstabcle
+            {    
+                err=err-deltaslowdirection;
+                if(err<0)
+                {
+                    err=err+deltafastdirection;
+                    x=x+ddx;
+                    y=y+ddy;
+                }
+                else
+                {
+                    x=x+pdx;
+                    y=y+pdy;
+                }
+
+                double d=sqrt( pow((x-xstart)*GRID_SPACING,2.0)+ pow((y-ystart)*GRID_SPACING,2.0) );
+                
+                if((*pcl_grid)[uint16_t(x)][uint16_t(y)]==discrete_pcl::set)
+                {
+                
+                    if((d<DMAX)&&(d>=DMIN))
+                    {
+                        (*current_grid)[uint16_t(x)][uint16_t(y)]=l[probability::fill];
+                        if_obstacle=true;
+                        break;
+                    }
+
+                }
+                
+            
+            }
+
+            if(if_obstacle==true)
+            {
+                x=xstart;
+                y=ystart;
+                err=deltafastdirection/2;
+                for(int32_t j=0;j<(deltafastdirection);j++)//Check if i have the obstabcle
+                {    
+                    err=err-deltaslowdirection;
+                    if(err<0)
+                    {
+                        err=err+deltafastdirection;
+                        x=x+ddx;
+                        y=y+ddy;
+                    }
+                    else
+                    {
+                        x=x+pdx;
+                        y=y+pdy;
+                    }
+
+                    if((*current_grid)[uint16_t(x)][uint16_t(y)]==l[probability::fill])
+                    {
+                        break;
+                    }
+                    else if((*current_grid)[uint16_t(x)][uint16_t(y)]==l[probability::unknown])
+                    {
+                        double d=sqrt( pow((x-xstart)*GRID_SPACING,2.0)+ pow((y-ystart)*GRID_SPACING,2.0) );
+                        if (d<DMIN)
+                        {
+                            (*current_grid)[uint16_t(x)][uint16_t(y)]=l[probability::clear];
+                        }
+                        else if((d<DMAX)&&(d>=DMIN))
+                        {
+                            (*current_grid)[uint16_t(x)][uint16_t(y)]=l[probability::clear];
+                            //(*current_grid)[uint16_t(x)][uint16_t(y)]=20+0.5*(d-DMIN);
+                        }
+                    }
+                    else if((*current_grid)[uint16_t(x)][uint16_t(y)]!=l[probability::unknown])
+                    {continue;}
+                    
+                
+                }
+            }
+
+            if(if_obstacle==false)
+            {
+                x=xstart;
+                y=ystart;
+                err=deltafastdirection/2;
+                for(int32_t j=0;j<(deltafastdirection);j++)//Check if i have the obstabcle
+                {    
+                    err=err-deltaslowdirection;
+                    if(err<0)
+                    {
+                        err=err+deltafastdirection;
+                        x=x+ddx;
+                        y=y+ddy;
+                    }
+                    else
+                    {
+                        x=x+pdx;
+                        y=y+pdy;
+                    }
+                    double d=sqrt( pow((x-xstart)*GRID_SPACING,2.0)+ pow((y-ystart)*GRID_SPACING,2.0) );
+                    if(d<DMAX)
+                        {
+                            (*current_grid)[uint16_t(x)][uint16_t(y)]=l[probability::clear];
+                        }
+                    
+                    
+
+                    
+                
+                }
+            }
+            
+        }
+    }
+} 
+*/
 
 
 
 
-
-
-
-
-
-
+/* 
 void create_freespace(uint8_t (*pcl_grid)[GRID_SIZE_X][GRID_SIZE_Y],float (*current_grid)[GRID_SIZE_X][GRID_SIZE_Y],const std::vector<float>& l,const ABC& acs)
 {
     double offset_x=car.get_x()-acs.get_current_anchor_x();
@@ -743,7 +1306,7 @@ void create_freespace(uint8_t (*pcl_grid)[GRID_SIZE_X][GRID_SIZE_Y],float (*curr
     }
 }
 
-
+*/
 
 
 

@@ -40,15 +40,23 @@ class ABC
         history_anchor_x=0.0;
         history_anchor_y=0.0;
 
-        grid_border_x1_cell=(GRID_SIZE_X*150/400)-1;
-        grid_border_x2_cell=(GRID_SIZE_X*250/400)-1;
-        grid_border_y1_cell=(GRID_SIZE_Y*150/400)-1;
-        grid_border_y2_cell=(GRID_SIZE_Y*250/400)-1;
+        grid_border_x1_cell=(GRID_SIZE_X*100/400);
+        grid_border_x2_cell=(GRID_SIZE_X*300/400);
+        grid_border_y1_cell=(GRID_SIZE_Y*100/400);
+        grid_border_y2_cell=(GRID_SIZE_Y*300/400);
 
         grid_border_x1_m=grid_border_x1_cell*GRID_SPACING;
         grid_border_x2_m=grid_border_x2_cell*GRID_SPACING;
         grid_border_y1_m=grid_border_y1_cell*GRID_SPACING;
         grid_border_y2_m=grid_border_y2_cell*GRID_SPACING;
+
+        grid_trans_x_cell=(grid_border_x2_cell-grid_border_x1_cell)/2;
+        grid_trans_y_cell=(grid_border_y2_cell-grid_border_y1_cell)/2;
+
+        grid_trans_x_m=grid_trans_x_cell*GRID_SPACING;
+        grid_trans_y_m=grid_trans_y_cell*GRID_SPACING;
+
+
 
     };
     //~ABC(){};
@@ -64,10 +72,10 @@ class ABC
     void set_history_anchor_x(double x){history_anchor_x=x;}
     void set_history_anchor_y(double y){history_anchor_y=y;}
 
-    int16_t get_borderoFcar_x1_cell() const {return grid_border_x1_cell;}
-    int16_t get_borderoFcar_x2_cell() const {return grid_border_x2_cell;}
-    int16_t get_borderoFcar_y1_cell() const {return grid_border_y1_cell;}
-    int16_t get_borderoFcar_y2_cell() const {return grid_border_y2_cell;}
+    uint16_t get_borderoFcar_x1_cell() const {return grid_border_x1_cell;}
+    uint16_t get_borderoFcar_x2_cell() const {return grid_border_x2_cell;}
+    uint16_t get_borderoFcar_y1_cell() const {return grid_border_y1_cell;}
+    uint16_t get_borderoFcar_y2_cell() const {return grid_border_y2_cell;}
 
     double get_borderoFcar_x1_m() const {return grid_border_x1_m;}
     double get_borderoFcar_x2_m() const {return grid_border_x2_m;}
@@ -78,11 +86,11 @@ class ABC
     //when car touch the border,grid should move; The distance it move are:
     //unit m
 
-    int16_t get_grid_trans_x_cell() const {return grid_border_x2_cell-grid_border_x1_cell;}
-    int16_t get_grid_trans_y_cell() const {return grid_border_y2_cell-grid_border_y1_cell;}
+    uint16_t get_grid_trans_x_cell() const {return grid_trans_x_cell;}
+    uint16_t get_grid_trans_y_cell() const {return grid_trans_y_cell;}
 
-    double get_grid_trans_x_m() const {return grid_border_x2_m-grid_border_x1_m;}
-    double get_grid_trans_y_m() const {return grid_border_y2_m-grid_border_y1_m;}
+    double get_grid_trans_x_m() const {return grid_trans_x_m;}
+    double get_grid_trans_y_m() const {return grid_trans_y_m;}
 
     
 
@@ -102,11 +110,16 @@ class ABC
     double grid_border_y1_m;
     double grid_border_y2_m;
   
-    int16_t grid_border_x1_cell;
-    int16_t grid_border_x2_cell;
-    int16_t grid_border_y1_cell;
-    int16_t grid_border_y2_cell;
-    
+    uint16_t grid_border_x1_cell;
+    uint16_t grid_border_x2_cell;
+    uint16_t grid_border_y1_cell;
+    uint16_t grid_border_y2_cell;
+
+    uint16_t grid_trans_x_cell;
+    uint16_t grid_trans_y_cell;
+
+    double grid_trans_x_m;
+    double grid_trans_y_m;
 
 
 };
