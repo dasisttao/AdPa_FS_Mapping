@@ -32,25 +32,26 @@ bool flag_msg_valid {false};
 uint64_t allowed_diff_ts_ns=25000;//0.025s -the allowed difference of timestamp between msg of car_pose and msg of pcl2
 
 
-namespace TEASY_LASERS
+namespace CAR_LASER
 {
-    double DMAX=10; //max distannce of reachement
-    double DMIN=1;
-    std::vector<double> laser_x {+3.6,-1.0,+3.3,+3.3,-0.5,-0.5}; //In VCS Vehicle Coordinate System
-    std::vector<double> laser_y {+0.0,+0.0,-0.8,+0.8,-0.8,+0.8};
-    std::vector<double> laser_yaw {-45*M_PI/180,-225*M_PI/180,-125*M_PI/180,35*M_PI/180,-145*M_PI/180,55*M_PI/180};
+    //double DMAX=10; //max distannce of reachement
+    //double DMIN=1;
+    std::vector<double> laser_x;
+    std::vector<double> laser_y;
+    std::vector<double> laser_yaw;
 
-    //std::vector<double> laser_x {+3.6,+3.3}; //In VCS Vehicle Coordinate System
-    //std::vector<double> laser_y {+0.0,-0.8};
-    //std::vector<double> laser_yaw {-45*M_PI/180,-125*M_PI/180};
+    std::vector<double> angle_resolution;
 
-    double angle_resolution=GRID_SPACING/DMAX;
-    uint32_t radiation_num=static_cast<uint32_t>(2*M_PI/angle_resolution);
-    uint8_t radiation_num_divder=4;
+    std::vector<uint32_t> radiation_num;
 
+    std::vector<int> radiation_num_divider;
+    
+
+    std::vector<double> range_min;
+    std::vector<double> range_max;
 }
 
-using namespace TEASY_LASERS;
+using namespace CAR_LASER;
 
 
  //++++++++++++++++++++++++++++++++++++++++++++++++global varibale+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -116,7 +117,67 @@ int main(int argc, char **argv)
     ROS_INFO("l_fill: %f",l[probability::fill]);
     ROS_INFO("l_clear: %f",l[probability::clear]);
 
+    
+    if(!nh.getParam("/range_min",range_min))
+        {ROS_ERROR("Failed to get range_min from server.");}
+    
+    for(int i=0;i<range_min.size();i++)
+    {
+        std::cout<<"range_min["<<i<<"] = "<<range_min[i]<<std::endl;
+    }
 
+    if(!nh.getParam("/range_max",range_max))
+        {ROS_ERROR("Failed to get range_max from server.");}
+    
+    for(int i=0;i<range_max.size();i++)
+    {
+        std::cout<<"range_max["<<i<<"] = "<<range_max[i]<<std::endl;
+    }
+    if(!nh.getParam("/laser_x",laser_x))
+        {ROS_ERROR("Failed to get laser_x from server.");}
+    
+    for(int i=0;i<laser_x.size();i++)
+    {
+        std::cout<<"laser_x["<<i<<"] = "<<laser_x[i]<<std::endl;
+    }
+    if(!nh.getParam("/laser_y",laser_y))
+        {ROS_ERROR("Failed to get laser_y from server.");}
+    
+    for(int i=0;i<laser_y.size();i++)
+    {
+        std::cout<<"laser_y["<<i<<"] = "<<laser_y[i]<<std::endl;
+    }
+
+    if(!nh.getParam("/laser_yaw",laser_yaw))
+        {ROS_ERROR("Failed to get laser_yaw from server.");}
+    
+    for(int i=0;i<laser_yaw.size();i++)
+    {
+        std::cout<<"laser_yaw["<<i<<"] = "<<laser_yaw[i]<<"*M_PI/180";
+        laser_yaw[i]=laser_yaw[i]*M_PI/180;
+        std::cout<<"="<<laser_yaw[i]<<std::endl;
+    }
+
+    if(!nh.getParam("/radiation_num_divider",radiation_num_divider))
+        {ROS_ERROR("Failed to get radiation_num_divider from server.");}
+    for(int i=0;i<radiation_num_divider.size();i++)
+    {
+        std::cout<<"radiation_num_divider["<<i<<"] = "<<radiation_num_divider[i]<<std::endl;
+    }
+
+
+    for(int i=0;i<range_max.size();i++)
+    {
+        angle_resolution.push_back(GRID_SPACING/range_max[i]);
+    }
+
+    for(int i=0;i<angle_resolution.size();i++)
+    {
+        radiation_num.push_back(static_cast<uint32_t>(2*M_PI/angle_resolution[i]));
+    }
+
+
+    
 
     float current_grid[GRID_SIZE_X][GRID_SIZE_Y];
     for(int i=0;i<GRID_SIZE_X;i++)
@@ -520,8 +581,6 @@ void adjust_ACS(ABC* acs)
                 } 
             BOOST_FOREACH (const pcl::PointXYZL& pt, pcl_msg->points)
             {
-                if(pt.label>=4)
-            {ROS_INFO("STILL LAYER 4-7");}
                 if((pt.label!=2)&&(pt.label!=3)&&(pt.label!=1)&&(pt.label!=0))
                 {
                     continue;
@@ -529,7 +588,7 @@ void adjust_ACS(ABC* acs)
                 if(pt.label==0)
                 {
                     if(pt.x>0)
-                    {
+                    {   
                         if((pt.z<2.8)&&((pt.z-0.1)>0))
                         {
                             geometry_msgs::Point pcl_acs;
@@ -615,10 +674,10 @@ void create_freespace(uint8_t (*pcl_grid)[GRID_SIZE_X][GRID_SIZE_Y],float (*curr
         int32_t xstart=floor(laser_abs_x/GRID_SPACING);
         int32_t ystart=floor(laser_abs_y/GRID_SPACING);
 
-        for(int num=0;num<(radiation_num/radiation_num_divder);num++)
+        for(int num=0;num<(radiation_num[laser_num]/radiation_num_divider[laser_num]);num++)
         {
-            int32_t beam_x=floor(cos(angle_resolution*num+laser_abs_yaw)*DMAX/GRID_SPACING);
-            int32_t beam_y=floor(sin(angle_resolution*num+laser_abs_yaw)*DMAX/GRID_SPACING);
+            int32_t beam_x=floor(cos(angle_resolution[laser_num]*num+laser_abs_yaw)*range_max[laser_num]/GRID_SPACING);
+            int32_t beam_y=floor(sin(angle_resolution[laser_num]*num+laser_abs_yaw)*range_max[laser_num]/GRID_SPACING);
 
             int32_t xend=xstart+beam_x;
             int32_t yend=ystart+beam_y;
@@ -626,9 +685,9 @@ void create_freespace(uint8_t (*pcl_grid)[GRID_SIZE_X][GRID_SIZE_Y],float (*curr
             if(xend>(GRID_SIZE_X-1))
             {
                 beam_x=GRID_SIZE_X-1-xstart;
-                double dmaxtemp=std::abs(beam_x*GRID_SPACING/(cos(angle_resolution*num+laser_abs_yaw)));
+                double dmaxtemp=std::abs(beam_x*GRID_SPACING/(cos(angle_resolution[laser_num]*num+laser_abs_yaw)));
 
-                beam_y=floor(sin(angle_resolution*num+laser_abs_yaw)*dmaxtemp/GRID_SPACING);
+                beam_y=floor(sin(angle_resolution[laser_num]*num+laser_abs_yaw)*dmaxtemp/GRID_SPACING);
 
                 xend=GRID_SIZE_X-1;
                 yend=ystart+beam_y;
@@ -637,9 +696,9 @@ void create_freespace(uint8_t (*pcl_grid)[GRID_SIZE_X][GRID_SIZE_Y],float (*curr
             else if(xend<0)
             {
                 beam_x=xstart-0;
-                double dmaxtemp=std::abs(beam_x*GRID_SPACING/(cos(angle_resolution*num+laser_abs_yaw)));
+                double dmaxtemp=std::abs(beam_x*GRID_SPACING/(cos(angle_resolution[laser_num]*num+laser_abs_yaw)));
 
-                beam_y=floor(sin(angle_resolution*num+laser_abs_yaw)*dmaxtemp/GRID_SPACING);
+                beam_y=floor(sin(angle_resolution[laser_num]*num+laser_abs_yaw)*dmaxtemp/GRID_SPACING);
 
                 xend=0;
                 yend=ystart+beam_y;
@@ -648,9 +707,9 @@ void create_freespace(uint8_t (*pcl_grid)[GRID_SIZE_X][GRID_SIZE_Y],float (*curr
             if(yend>(GRID_SIZE_Y-1))
             {
                 beam_y=GRID_SIZE_Y-1-ystart;
-                double dmaxtemp=std::abs(beam_y*GRID_SPACING/(sin(angle_resolution*num+laser_abs_yaw)));
+                double dmaxtemp=std::abs(beam_y*GRID_SPACING/(sin(angle_resolution[laser_num]*num+laser_abs_yaw)));
                 
-                beam_x=floor(cos(angle_resolution*num+laser_abs_yaw)*dmaxtemp/GRID_SPACING);
+                beam_x=floor(cos(angle_resolution[laser_num]*num+laser_abs_yaw)*dmaxtemp/GRID_SPACING);
 
                 yend=GRID_SIZE_X-1;
                 xend=xstart+beam_x;
@@ -658,9 +717,9 @@ void create_freespace(uint8_t (*pcl_grid)[GRID_SIZE_X][GRID_SIZE_Y],float (*curr
             else if(yend<0)
             {
                 beam_y=ystart-0;
-                double dmaxtemp=std::abs(beam_y*GRID_SPACING/(sin(angle_resolution*num+laser_abs_yaw)));
+                double dmaxtemp=std::abs(beam_y*GRID_SPACING/(sin(angle_resolution[laser_num]*num+laser_abs_yaw)));
 
-                beam_y=floor(cos(angle_resolution*num+laser_abs_yaw)*dmaxtemp/GRID_SPACING);
+                beam_y=floor(cos(angle_resolution[laser_num]*num+laser_abs_yaw)*dmaxtemp/GRID_SPACING);
 
                 yend=0;
                 xend=xstart+beam_x;
@@ -734,7 +793,7 @@ void create_freespace(uint8_t (*pcl_grid)[GRID_SIZE_X][GRID_SIZE_Y],float (*curr
                 if((*pcl_grid)[uint16_t(x)][uint16_t(y)]==discrete_pcl::set)
                 {
                 
-                    if((d<DMAX)&&(d>=DMIN))
+                    if((d<range_max[laser_num])&&(d>=range_min[laser_num]))
                     {
                         (*current_grid)[uint16_t(x)][uint16_t(y)]=l[probability::fill];
                         if_obstacle=true;
@@ -773,11 +832,11 @@ void create_freespace(uint8_t (*pcl_grid)[GRID_SIZE_X][GRID_SIZE_Y],float (*curr
                     else if((*current_grid)[uint16_t(x)][uint16_t(y)]==l[probability::unknown])
                     {
                         double d=sqrt( pow((x-xstart)*GRID_SPACING,2.0)+ pow((y-ystart)*GRID_SPACING,2.0) );
-                        if (d<DMIN)
+                        if (d<range_min[laser_num])
                         {
                             (*current_grid)[uint16_t(x)][uint16_t(y)]=l[probability::clear];
                         }
-                        else if((d<DMAX)&&(d>=DMIN))
+                        else if((d<range_max[laser_num])&&(d>=range_min[laser_num]))
                         {
                             (*current_grid)[uint16_t(x)][uint16_t(y)]=l[probability::clear];
                             //(*current_grid)[uint16_t(x)][uint16_t(y)]=20+0.5*(d-DMIN);
@@ -810,7 +869,7 @@ void create_freespace(uint8_t (*pcl_grid)[GRID_SIZE_X][GRID_SIZE_Y],float (*curr
                         y=y+pdy;
                     }
                     double d=sqrt( pow((x-xstart)*GRID_SPACING,2.0)+ pow((y-ystart)*GRID_SPACING,2.0) );
-                    if(d<DMAX)
+                    if(d<range_max[laser_num])
                         {
                             (*current_grid)[uint16_t(x)][uint16_t(y)]=l[probability::clear];
                         }
