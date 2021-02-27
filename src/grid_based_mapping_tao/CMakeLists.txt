@@ -163,6 +163,8 @@ target_link_libraries(ad_pa_fs_mapping
   ${catkin_LIBRARIES}
 )
 add_dependencies(ad_pa_fs_mapping grid_based_mapping_tao_generate_messages_cpp)
+
+
 ## Declare a C++ library
 # add_library(${PROJECT_NAME}
 #   src/${PROJECT_NAME}/grid_based_mapping_tao.cpp

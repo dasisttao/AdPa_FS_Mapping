@@ -1,4 +1,5 @@
 #include "grid_based_mapping_tao/parameter_grid.h"
+#include "ros_can_gps_msg/gpsData.h"
 #include <pcl/filters/statistical_outlier_removal.h>
 #include <message_filters/subscriber.h>
 #include <message_filters/time_synchronizer.h>
@@ -69,7 +70,7 @@ bool if_get_new_data {false};
 
 void update_grid_when_anchor_moved(float (*grid)[GRID_SIZE_X][GRID_SIZE_Y],float new_are_fullfill,const ABC& acs);
 
-void callback(const  geometry_msgs::PoseStamped::ConstPtr& pose_msg,const pcl::PointCloud<pcl::PointXYZL>::ConstPtr& pcl_msg,uint8_t (*pcl_grid)[GRID_SIZE_X][GRID_SIZE_Y],ABC* ptracs);
+void callback(const  geometry_msgs::PoseStamped::ConstPtr& pose_msg,const pcl::PointCloud<pcl::PointXYZL>::ConstPtr& pcl_msg,const ros_can_gps_msg::gpsData::ConstPtr& gps_msg,uint8_t (*pcl_grid)[GRID_SIZE_X][GRID_SIZE_Y],ABC* ptracs);
 void adjust_ACS(ABC &acs);// according to the current pose of car,update the ACS anchor
 void anchor_init(const Vehicle& car,ABC& acs);// according to the initial pose of car, initiliaze the ACS anchor. 
 
@@ -80,6 +81,12 @@ std::vector<float> l;
 enum probability {max=0,min=1,unknown=2,fill=3,clear=4};
 
 enum discrete_pcl {unset=0,set=1};
+
+enum car_shadow {cover=77,uncover=88};
+
+uint8_t occupied_grid[GRID_SIZE_X][GRID_SIZE_Y];
+   
+
 
 //++++++++++++++++++++++++++++++++++++++++++++++++++MAIN++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 int main(int argc, char **argv)
@@ -108,6 +115,13 @@ int main(int argc, char **argv)
     nh.getParam("p_clear",param);
     l.push_back(log(param/(100.0-param)));
 
+    int visual_param;
+    nh.getParam("visual_way",visual_param);
+    ROS_INFO("%d",visual_param);
+
+    float binary_threshold;
+    nh.getParam("binary_threshold",binary_threshold);
+    ROS_INFO("%f",binary_threshold);
     
     
     ROS_INFO("l_max: %f",l[probability::max]);
@@ -194,6 +208,10 @@ int main(int argc, char **argv)
         for(int j=0;j<GRID_SIZE_Y;j++)
             pcl_grid[i][j]=discrete_pcl::unset;
 
+    for(int i=0;i<GRID_SIZE_X;i++)
+        for(int j=0;j<GRID_SIZE_Y;j++)
+            occupied_grid[i][j]=car_shadow::uncover;
+
     float (*current_grid_pointer)[GRID_SIZE_X][GRID_SIZE_Y]=&current_grid;
     float (*history_grid_pointer)[GRID_SIZE_X][GRID_SIZE_Y]=&history_grid;
     uint8_t (*pcl_grid_pointer)[GRID_SIZE_X][GRID_SIZE_Y]=&pcl_grid;
@@ -202,13 +220,34 @@ int main(int argc, char **argv)
 
     message_filters::Subscriber<geometry_msgs::PoseStamped> pose_sub(nh,"/VehiclePoseFusionUTM",1000);
     message_filters::Subscriber<pcl::PointCloud<pcl::PointXYZL>> pcl_sub(nh,"/as_tx/point_cloud",1000);
-    typedef message_filters::sync_policies::ApproximateTime<geometry_msgs::PoseStamped, pcl::PointCloud<pcl::PointXYZL>> MySyncPolicy;
-    message_filters::Synchronizer<MySyncPolicy> sync(MySyncPolicy(10),pose_sub,pcl_sub);
-    sync.registerCallback(boost::bind(&callback, _1, _2,pcl_grid_pointer,ptracs));
+    message_filters::Subscriber<ros_can_gps_msg::gpsData> gps_sub(nh,"/can_2_ros_gps",1000);
+
+    typedef message_filters::sync_policies::ApproximateTime<geometry_msgs::PoseStamped, pcl::PointCloud<pcl::PointXYZL>,ros_can_gps_msg::gpsData> MySyncPolicy;
+    message_filters::Synchronizer<MySyncPolicy> sync(MySyncPolicy(10),pose_sub,pcl_sub,gps_sub);
+    sync.registerCallback(boost::bind(&callback, _1, _2, _3,pcl_grid_pointer,ptracs));
 
     ros::Publisher car_pub = nh.advertise<nav_msgs::GridCells>("car_visual",1000);
     ros::Publisher anchor_pub = nh.advertise<nav_msgs::GridCells>("acs_visual",1000);
     ros::Publisher oG_pub = nh.advertise<nav_msgs::OccupancyGrid>("oG",1000);
+
+    
+        ros::Publisher p_less_than_threshold_pub = nh.advertise<nav_msgs::GridCells>("p_less_than_threshold_pub",1000);
+        ros::Publisher p_larger_than_threshold_pub = nh.advertise<nav_msgs::GridCells>("p_larger_than_threshold_pub",1000);
+        ros::Publisher p_50_pub = nh.advertise<nav_msgs::GridCells>("p_50_pub",1000);
+    
+    
+        ros::Publisher p_00_10_pub = nh.advertise<nav_msgs::GridCells>("p_00_10_pub",1000);
+        ros::Publisher p_10_20_pub = nh.advertise<nav_msgs::GridCells>("p_10_20_pub",1000);
+        ros::Publisher p_20_30_pub = nh.advertise<nav_msgs::GridCells>("p_20_30_pub",1000);
+        ros::Publisher p_30_40_pub = nh.advertise<nav_msgs::GridCells>("p_30_40_pub",1000);
+        ros::Publisher p_40_50_pub = nh.advertise<nav_msgs::GridCells>("p_40_50_pub",1000);
+        ros::Publisher p_50_60_pub = nh.advertise<nav_msgs::GridCells>("p_50_60_pub",1000);
+        ros::Publisher p_60_70_pub = nh.advertise<nav_msgs::GridCells>("p_60_70_pub",1000);
+        ros::Publisher p_70_80_pub = nh.advertise<nav_msgs::GridCells>("p_70_80_pub",1000);
+        ros::Publisher p_80_90_pub = nh.advertise<nav_msgs::GridCells>("p_80_90_pub",1000);
+        ros::Publisher p_90_100_pub = nh.advertise<nav_msgs::GridCells>("p_90_100_pub",1000);
+    
+    
     
     //Wait a valid msg and then initialize the anchor position
     ROS_INFO("Waiting message... ...");
@@ -228,9 +267,19 @@ int main(int argc, char **argv)
     ROS_INFO("Anchor init_postion ( %f, %f )",acs.get_current_anchor_x(),acs.get_current_anchor_y());
     ROS_INFO("difference ( %f, %f ) ",car.get_x()-acs.get_current_anchor_x(),car.get_y()-acs.get_current_anchor_y());
     
-    
+    ros::Time time_1;
+    ros::Time time_2;
+    ros::Duration diff;
+    bool if_time_1 {false};
     while(ros::ok())
     {
+        if(if_time_1==false)
+        {
+            time_1=ros::Time::now();
+            if_time_1=true;
+        }
+        
+        
         ros::spinOnce();//call all the callbacks waiting to be called at that point in time.
          
         if(if_get_new_data==true)
@@ -258,6 +307,7 @@ int main(int argc, char **argv)
             for(int i=0;i<car_grid.size();i++)
             {
                 current_grid[uint16_t(car_grid[i].x)][uint16_t(car_grid[i].y)]=l[probability::clear];
+                occupied_grid[uint16_t(car_grid[i].x)][uint16_t(car_grid[i].y)]=car_shadow::cover;
             }
         
             std::vector<geometry_msgs::Point> car_cluster;
@@ -282,6 +332,164 @@ int main(int argc, char **argv)
             binary_bayes(current_grid_pointer,history_grid_pointer,l[probability::max],l[probability::min],l[probability::unknown]);
             
 
+
+            if(visual_param==1)
+            {
+                std::vector<geometry_msgs::Point> p_00_10;
+                std::vector<geometry_msgs::Point> p_10_20;
+                std::vector<geometry_msgs::Point> p_20_30;
+                std::vector<geometry_msgs::Point> p_30_40;
+                std::vector<geometry_msgs::Point> p_40_50;
+                std::vector<geometry_msgs::Point> p_50_60;
+                std::vector<geometry_msgs::Point> p_60_70;
+                std::vector<geometry_msgs::Point> p_70_80;
+                std::vector<geometry_msgs::Point> p_80_90;
+                std::vector<geometry_msgs::Point> p_90_100;
+                std::vector<geometry_msgs::Point> p_50;
+
+                for(auto j=0;j<GRID_SIZE_Y;j++)
+                    for(auto i=0;i<GRID_SIZE_X;i++)
+                    {
+                        if(history_grid[i][j]==l[probability::unknown])
+                        {
+                            cluster_point.x=acs.get_current_anchor_x()+i*GRID_SPACING;
+                            cluster_point.y=acs.get_current_anchor_y()+j*GRID_SPACING;
+                            cluster_point.z=0.0;
+                            p_50.push_back(cluster_point);
+                            continue;
+                        }
+                        int8_t p=100.0-(100.0/(1.0+exp(history_grid[i][j])));
+                        if((p>=0)&&(p<10)&&(occupied_grid[i][j]==car_shadow::uncover))
+                        {
+                            cluster_point.x=acs.get_current_anchor_x()+i*GRID_SPACING;
+                            cluster_point.y=acs.get_current_anchor_y()+j*GRID_SPACING;
+                            cluster_point.z=0.0;
+                            p_00_10.push_back(cluster_point);
+                        }
+                        else if((p>=10)&&(p<20)&&(occupied_grid[i][j]==car_shadow::uncover))
+                        {
+                            cluster_point.x=acs.get_current_anchor_x()+i*GRID_SPACING;
+                            cluster_point.y=acs.get_current_anchor_y()+j*GRID_SPACING;
+                            cluster_point.z=0.0;
+                            p_10_20.push_back(cluster_point);
+                        }
+                        else if((p>=20)&&(p<30)&&(occupied_grid[i][j]==car_shadow::uncover))
+                        {
+                            cluster_point.x=acs.get_current_anchor_x()+i*GRID_SPACING;
+                            cluster_point.y=acs.get_current_anchor_y()+j*GRID_SPACING;
+                            cluster_point.z=0.0;
+                            p_20_30.push_back(cluster_point);
+                        }
+                        else if((p>=30)&&(p<40)&&(occupied_grid[i][j]==car_shadow::uncover))
+                        {
+                            cluster_point.x=acs.get_current_anchor_x()+i*GRID_SPACING;
+                            cluster_point.y=acs.get_current_anchor_y()+j*GRID_SPACING;
+                            cluster_point.z=0.0;
+                            p_30_40.push_back(cluster_point);
+                        }
+                        else if((p>=40)&&(p<50)&&(occupied_grid[i][j]==car_shadow::uncover))
+                        {
+                            cluster_point.x=acs.get_current_anchor_x()+i*GRID_SPACING;
+                            cluster_point.y=acs.get_current_anchor_y()+j*GRID_SPACING;
+                            cluster_point.z=0.0;
+                            p_40_50.push_back(cluster_point);
+                        }
+                        else if((p>50)&&(p<60)&&(occupied_grid[i][j]==car_shadow::uncover))
+                        {
+                            cluster_point.x=acs.get_current_anchor_x()+i*GRID_SPACING;
+                            cluster_point.y=acs.get_current_anchor_y()+j*GRID_SPACING;
+                            cluster_point.z=0.0;
+                            p_50_60.push_back(cluster_point);
+                        }
+                        else if((p>=60)&&(p<70)&&(occupied_grid[i][j]==car_shadow::uncover))
+                        {
+                            cluster_point.x=acs.get_current_anchor_x()+i*GRID_SPACING;
+                            cluster_point.y=acs.get_current_anchor_y()+j*GRID_SPACING;
+                            cluster_point.z=0.0;
+                            p_60_70.push_back(cluster_point);
+                        }
+                        else if((p>=70)&&(p<80)&&(occupied_grid[i][j]==car_shadow::uncover))
+                        {
+                            cluster_point.x=acs.get_current_anchor_x()+i*GRID_SPACING;
+                            cluster_point.y=acs.get_current_anchor_y()+j*GRID_SPACING;
+                            cluster_point.z=0.0;
+                            p_70_80.push_back(cluster_point);
+                        }
+                        else if((p>=80)&&(p<90)&&(occupied_grid[i][j]==car_shadow::uncover))
+                        {
+                            cluster_point.x=acs.get_current_anchor_x()+i*GRID_SPACING;
+                            cluster_point.y=acs.get_current_anchor_y()+j*GRID_SPACING;
+                            cluster_point.z=0.0;
+                            p_80_90.push_back(cluster_point);
+                        }
+                        else if((p>=90)&&(p<=100)&&(occupied_grid[i][j]==car_shadow::uncover))
+                        {
+                            cluster_point.x=acs.get_current_anchor_x()+i*GRID_SPACING;
+                            cluster_point.y=acs.get_current_anchor_y()+j*GRID_SPACING;
+                            cluster_point.z=0.0;
+                            p_90_100.push_back(cluster_point);
+                        }
+
+                    }
+                
+                
+
+
+
+                visualize_girdcells(p_90_100,"map",float(GRID_SPACING),float(GRID_SPACING),p_90_100_pub,VISUAL_OFFSET_X,VISUAL_OFFSET_Y);
+                visualize_girdcells(p_00_10,"map",float(GRID_SPACING),float(GRID_SPACING),p_00_10_pub,VISUAL_OFFSET_X,VISUAL_OFFSET_Y);
+                visualize_girdcells(p_10_20,"map",float(GRID_SPACING),float(GRID_SPACING),p_10_20_pub,VISUAL_OFFSET_X,VISUAL_OFFSET_Y);
+                visualize_girdcells(p_20_30,"map",float(GRID_SPACING),float(GRID_SPACING),p_20_30_pub,VISUAL_OFFSET_X,VISUAL_OFFSET_Y);
+                visualize_girdcells(p_30_40,"map",float(GRID_SPACING),float(GRID_SPACING),p_30_40_pub,VISUAL_OFFSET_X,VISUAL_OFFSET_Y);
+                visualize_girdcells(p_40_50,"map",float(GRID_SPACING),float(GRID_SPACING),p_40_50_pub,VISUAL_OFFSET_X,VISUAL_OFFSET_Y);
+                visualize_girdcells(p_50_60,"map",float(GRID_SPACING),float(GRID_SPACING),p_50_60_pub,VISUAL_OFFSET_X,VISUAL_OFFSET_Y);
+                visualize_girdcells(p_60_70,"map",float(GRID_SPACING),float(GRID_SPACING),p_60_70_pub,VISUAL_OFFSET_X,VISUAL_OFFSET_Y);
+                visualize_girdcells(p_70_80,"map",float(GRID_SPACING),float(GRID_SPACING),p_70_80_pub,VISUAL_OFFSET_X,VISUAL_OFFSET_Y);
+                visualize_girdcells(p_80_90,"map",float(GRID_SPACING),float(GRID_SPACING),p_80_90_pub,VISUAL_OFFSET_X,VISUAL_OFFSET_Y);
+                visualize_girdcells(p_90_100,"map",float(GRID_SPACING),float(GRID_SPACING),p_90_100_pub,VISUAL_OFFSET_X,VISUAL_OFFSET_Y);
+                visualize_girdcells(p_50,"map",float(GRID_SPACING),float(GRID_SPACING),p_50_pub,VISUAL_OFFSET_X,VISUAL_OFFSET_Y);
+            }
+            
+            if(visual_param==0)
+            {
+                std::vector<geometry_msgs::Point> p_larger_than_threshold;
+                std::vector<geometry_msgs::Point> p_less_than_threshold;
+                std::vector<geometry_msgs::Point> p_50;
+
+                 for(auto j=0;j<GRID_SIZE_Y;j++)
+                    for(auto i=0;i<GRID_SIZE_X;i++)
+                    {
+                        if(history_grid[i][j]==l[probability::unknown])
+                        {
+                            cluster_point.x=acs.get_current_anchor_x()+i*GRID_SPACING;
+                            cluster_point.y=acs.get_current_anchor_y()+j*GRID_SPACING;
+                            cluster_point.z=0.0;
+                            p_50.push_back(cluster_point);
+                            continue;
+                        }
+                        int8_t p=100.0-(100.0/(1.0+exp(history_grid[i][j])));
+                        if((p>=0)&&(p<binary_threshold)&&(occupied_grid[i][j]==car_shadow::uncover))
+                        {
+                            cluster_point.x=acs.get_current_anchor_x()+i*GRID_SPACING;
+                            cluster_point.y=acs.get_current_anchor_y()+j*GRID_SPACING;
+                            cluster_point.z=0.0;
+                            p_less_than_threshold.push_back(cluster_point);
+                        }
+                        else if((p>=binary_threshold)&&(p<=100)&&(occupied_grid[i][j]==car_shadow::uncover))
+                        {
+                            cluster_point.x=acs.get_current_anchor_x()+i*GRID_SPACING;
+                            cluster_point.y=acs.get_current_anchor_y()+j*GRID_SPACING;
+                            cluster_point.z=0.0;
+                            p_larger_than_threshold.push_back(cluster_point);
+                        }
+                    }
+                visualize_girdcells(p_larger_than_threshold,"map",float(GRID_SPACING),float(GRID_SPACING),p_larger_than_threshold_pub,VISUAL_OFFSET_X,VISUAL_OFFSET_Y);
+                visualize_girdcells(p_less_than_threshold,"map",float(GRID_SPACING),float(GRID_SPACING),p_less_than_threshold_pub,VISUAL_OFFSET_X,VISUAL_OFFSET_Y);
+                visualize_girdcells(p_50,"map",float(GRID_SPACING),float(GRID_SPACING),p_50_pub,VISUAL_OFFSET_X,VISUAL_OFFSET_Y);
+
+            }
+
+            /*
             std::vector<int8_t> probability_vector;
 
             
@@ -299,12 +507,12 @@ int main(int argc, char **argv)
                     }
                     
                 }
-
+             
         
             
             oG2D.visualization(probability_vector,oG_pub,"map");
             
-
+            */
 
             visualize_girdcells(anchor_cluster,"map",float(1),float(1),anchor_pub,VISUAL_OFFSET_X,VISUAL_OFFSET_Y);
             visualize_girdcells(car_cluster,"map",float(GRID_SPACING),float(GRID_SPACING),car_pub,VISUAL_OFFSET_X,VISUAL_OFFSET_Y);
@@ -314,14 +522,22 @@ int main(int argc, char **argv)
                 for(int j=0;j<GRID_SIZE_Y;j++)
                 {
                     current_grid[i][j]=l[probability::unknown];
+                    occupied_grid[i][j]=car_shadow::uncover;
                 }
 
             acs.set_history_anchor_x(acs.get_current_anchor_x());
             acs.set_history_anchor_y(acs.get_current_anchor_y());
              
-            
             if_get_new_data=false;
             
+        if(if_time_1==true)
+        {
+            time_2=ros::Time::now();
+            diff=time_2-time_1;
+            if_time_1=false;
+        }
+        std::cout<<"TIME DIFFERENCE "<<diff<<std::endl;
+
         }
         
 
@@ -541,7 +757,7 @@ void adjust_ACS(ABC* acs)
 }
 
 
- void callback(const  geometry_msgs::PoseStamped::ConstPtr& pose_msg,const pcl::PointCloud<pcl::PointXYZL>::ConstPtr& pcl_msg,uint8_t(*pcl_grid)[GRID_SIZE_X][GRID_SIZE_Y],ABC* ptracs)
+ void callback(const  geometry_msgs::PoseStamped::ConstPtr& pose_msg,const pcl::PointCloud<pcl::PointXYZL>::ConstPtr& pcl_msg,const ros_can_gps_msg::gpsData::ConstPtr& gps_msg,uint8_t(*pcl_grid)[GRID_SIZE_X][GRID_SIZE_Y],ABC* ptracs)
 {
     uint64_t pose_ts_ns=uint64_t(pose_msg->header.stamp.nsec)/1000; //pose time stamp nano second
     uint64_t pose_ts_s=uint64_t(pose_msg->header.stamp.sec);        //pose time stamp second
@@ -557,6 +773,7 @@ void adjust_ACS(ABC* acs)
     {
         bool skip_the_frame {false};//Flag to check if we should skip the frame
 
+         
         BOOST_FOREACH(const pcl::PointXYZL& pt, pcl_msg->points)
         {
           if(pt.label>=4)
@@ -565,6 +782,7 @@ void adjust_ACS(ABC* acs)
             break;
           }  
         }
+        
         if(skip_the_frame==false)
         {
             
@@ -572,6 +790,8 @@ void adjust_ACS(ABC* acs)
             car.set_y(pose_msg->pose.position.y);
             car.set_psi(pose_msg->pose.position.z); 
 
+            car.set_rate_pitch(gps_msg->rateshorizontal.RYH);
+            car.set_pitch(gps_msg->ins_angle_gps_course.Angle_Pitch);
             adjust_ACS(ptracs);
 
             for(int i=0;i<GRID_SIZE_X;i++)
@@ -581,10 +801,12 @@ void adjust_ACS(ABC* acs)
                 } 
             BOOST_FOREACH (const pcl::PointXYZL& pt, pcl_msg->points)
             {
+                
                 if((pt.label!=2)&&(pt.label!=3)&&(pt.label!=1)&&(pt.label!=0))
                 {
                     continue;
                 }
+                
                 if(pt.label==0)
                 {
                     if(pt.x>0)
@@ -663,7 +885,33 @@ void create_freespace(uint8_t (*pcl_grid)[GRID_SIZE_X][GRID_SIZE_Y],float (*curr
     double offset_x=car.get_x()-acs.get_current_anchor_x();
     double offset_y=car.get_y()-acs.get_current_anchor_y();
 
-    for(int laser_num=0;laser_num<laser_x.size();laser_num++)
+    static bool if_change_pitch {false};
+    static int if_ramp {0};
+    //double current_pitch=car.get_pitch();
+    //ROS_INFO("current pitch %f ",current_pitch);
+    
+    
+    if((car.get_rate_pitch()<-4)&&(if_change_pitch==false))
+    {
+        ROS_INFO("pitch changed!");
+        if_change_pitch=true;
+    }
+    if((if_change_pitch==true)&&(car.get_pitch()<(-8))&&(if_ramp==0))
+    {
+        ROS_INFO("pitch is less than -8,assuming the car on the ramp!");
+        if_ramp=1;
+    }
+    if((if_ramp==1)&&(car.get_pitch()>(-4)))
+    {
+      
+            ROS_INFO("car off ramp,turn on the front laser!");
+            if_ramp=0;
+            if_change_pitch=false;
+        
+    }
+
+    
+    for(int laser_num=if_ramp;laser_num<laser_x.size();laser_num++)
     {
         double pos_psy=(-car.get_psi()+90)/180*M_PI;
         double laser_abs_x=cos(pos_psy)*laser_x[laser_num]-sin(pos_psy)*laser_y[laser_num]+offset_x;
